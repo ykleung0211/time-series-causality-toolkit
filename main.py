@@ -3,6 +3,8 @@ import numpy as np
 import yfinance as yf
 import matplotlib.pyplot as plt
 from numpy.linalg import norm
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="statsmodels.tsa.stattools")
 
 from statsmodels.tsa.stattools import grangercausalitytests
 from dtw import dtw
@@ -102,11 +104,11 @@ def compute_granger_causality(nasdaq, sp500, max_lag = 5):
 
     print("== Granger Causality Test: Does Nasdaq cause S&P 500? (Nasdaq -> S&P 500) ==")
     # Y = S&P 500, X = Nasdaq
-    grangercausalitytests(df[["SP500_log_return", "Nasdaq_log_return"]], maxlag = max_lag, verbose = True)
+    grangercausalitytests(df[["SP500_log_return", "Nasdaq_log_return"]], maxlag = max_lag, verbose = False)
 
     print("\n== Granger Causality Test: Does S&P 500 cause Nasdaq? (S&P 500 -> Nasdaq) ==")
     # Y = Nasdaq, X = S&P 500
-    grangercausalitytests(df[["Nasdaq_log_return", "SP500_log_return"]], maxlag = max_lag, verbose = True)
+    grangercausalitytests(df[["Nasdaq_log_return", "SP500_log_return"]], maxlag = max_lag, verbose = False)
 
    
 
@@ -124,7 +126,7 @@ def compute_te_ccm(nasdaq, sp500):
     embed_dim = 3
     tau = 1
 
-    print("== Transfer Entropy (Nasdaq_log_return -> SP500_log_return) ==")
+    print("\n== Transfer Entropy (Nasdaq_log_return -> SP500_log_return) ==")
     te_xy = transfer_entropy(
         nasdaq_arr, sp500_arr,
         approach = "ordinal",
@@ -143,24 +145,85 @@ def compute_te_ccm(nasdaq, sp500):
     print("TE S&P 500 -> Nasdaq:", te_yx)
 
     # Compute Convergent Cross Mapping (CCM)
+    data = np.column_stack([nasdaq_arr, sp500_arr])
+    ccm_model = ccm.ConvergeCrossMapping(embed_dim=embed_dim, lag=tau)
+    ccm_model.fit(data)
+    scores = ccm_model.scores
+    
     print("\n== CCM (Nasdaq_log_return -> SP500_log_return) ==")
-    ccm_xy = ccm.ConvergeCrossMapping(
-        nasdaq_arr, sp500_arr,
-        lib_sizes = len(nasdaq_arr) // 2 # In reality, we would test across a range of library sizes to see convergence, but we will just use a single size for simplicity.
-    )
-    print("CCM Nasdaq -> S&P 500 correlation:", ccm_xy["rho"])
-
+    print("CCM Nasdaq -> S&P 500:", scores[1, 0])
+    
     print("\n== CCM (SP500_log_return -> Nasdaq_log_return) ==")
-    ccm_yx = ccm.ConvergeCrossMapping(
-        sp500_arr, nasdaq_arr,
-        embed_dim = embed_dim,
-        lag = tau,
-        lib_sizes = len(sp500_arr) // 2
-    )
+    print("CCM S&P 500 -> Nasdaq:", scores[0, 1])
+
+def shuffle_surrogate(series):
+    ''' 
+    Return a shuffled version of the series (destroys temoral structure but preserves distribution) for surrogate testing.
+    '''
+    shuffled = series.copy()
+    np.random.shuffle(shuffled)
+    return shuffled
+
+def simple_te_surrogate_test(X, Y, num_surrogates=100):
+    ''' 
+    Compute TE(X->Y) for real data and for shuffled surrogates of X,
+    then see where the real TE lies in that surrogate distribution.
+    '''
+    embed_dim = 3
+    tau = 1
+
+    real_te = transfer_entropy(
+        X, Y, 
+        approach="ordinal", 
+        embedding_dim=embed_dim, 
+        step_size=tau)
+    surrogate_te = []
+    for _ in range(num_surrogates):
+        X_shuffled = shuffle_surrogate(X)
+        te_surr = transfer_entropy(
+            X_shuffled, Y, 
+            approach="ordinal", 
+            embedding_dim=embed_dim, 
+            step_size=tau)
+        surrogate_te.append(te_surr)
+
+    surrogate_te = np.array(surrogate_te)
+    p_value = (np.sum(surrogate_te >= real_te) + 1) / (num_surrogates + 1)  
+
+    print("\nReal TE:", real_te)
+    print("Surrogate TE mean:", surrogate_te.mean())
+    print("Approximate p-value (one-sided):", p_value)
+
+def simple_bootstrap_te(X, Y, num_bootstrap=100):
+    ''' 
+    Bootstrap TE by resampling time indexes with replacement
+    '''
+    embed_dim = 3
+    tau = 1
+
+    n = len(X)
+    bootstrap_te = []
+    for _ in range(num_bootstrap):
+        idx = np.random.randint(0, n, size=n)
+        X_boot = X[idx]
+        Y_boot = Y[idx]
+        te_boot = transfer_entropy(
+            X_boot, Y_boot, 
+            approach="ordinal", 
+            embedding_dim=embed_dim, 
+            step_size=tau)
+        bootstrap_te.append(te_boot)
+
+    bootstrap_te = np.array(bootstrap_te)
+    print("\nBootstrap TE mean:", bootstrap_te.mean())
+    print("Bootstrap TE 2.5% quantile:", np.percentile(bootstrap_te, 2.5))
+    print("Bootstrap TE 97.5% quantile:", np.percentile(bootstrap_te, 97.5))
 
 if __name__ == "__main__":
-    price, log_returns = download_data()
+    _price, log_returns = download_data()
     smoothed_nasdaq, smoothed_sp500 = demo_smoothing(log_returns)
     dtw_distance = demo_dtw(smoothed_nasdaq, smoothed_sp500)            
     compute_granger_causality(smoothed_nasdaq, smoothed_sp500, max_lag = 5)
     compute_te_ccm(smoothed_nasdaq, smoothed_sp500)
+    simple_te_surrogate_test(smoothed_nasdaq.values, smoothed_sp500.values, num_surrogates=100)
+    simple_bootstrap_te(smoothed_nasdaq.values, smoothed_sp500.values, num_bootstrap=100)
