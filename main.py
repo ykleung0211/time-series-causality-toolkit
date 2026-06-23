@@ -315,8 +315,18 @@ if __name__ == '__main__':
     print('\nRunning Granger causality (verbose output will be shown)...')
     # prepare original (not-array) series for granger
     df_for_granger = prepare_granger_df(s1, s2, t1, t2)
+    print(f"\nGranger causality tests for {name1} → {name2}:")
     grangercausalitytests(df_for_granger[[f"{t2}_log_return", f"{t1}_log_return"]], maxlag=maxlag, verbose=True)
+    print(f"\nGranger causality tests for {name2} → {name1}:")
     grangercausalitytests(df_for_granger[[f"{t1}_log_return", f"{t2}_log_return"]], maxlag=maxlag, verbose=True)
+
+    # Compute Granger causality strength for summary
+    gr_12, gr_21 = granger_strength(s1, s2, maxlag, verbose=False)
+    print('\n' + '='*80)
+    print('GRANGER CAUSALITY RESULTS (max F-stat across lags)')
+    print('='*80)
+    print(f"{name1} → {name2}: {gr_12:.6f}")
+    print(f"{name2} → {name1}: {gr_21:.6f}")
 
     # TE and CCM params
     te_embed = int(input("\nTE embedding dimension (default 3): ").strip() or 3)
