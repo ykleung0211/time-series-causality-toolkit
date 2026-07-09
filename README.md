@@ -1,36 +1,34 @@
 # Time-Series Causality Toolkit
 
-This project is structured as a reusable toolkit plus case studies.
+This project provides a reusable toolkit for pairwise time-series causality analysis plus a notebook demo.
 
 ## Structure
 
-- `finance_dtw_causality_toy/`: core reusable code
-	- `data.py`: ticker lookup and data download helpers
-	- `preprocessing.py`: smoothing and downsampling
-	- `stationarity.py`: ADF / unit-root testing and automatic differencing
-	- `metrics.py`: DTW, Granger causality, transfer entropy, CCM, and parameter sweeps
-	- `surrogate.py`: shuffle and bootstrap surrogate tests with reproducible seeds
-	- `plotting.py`: reusable visualization helpers
-- `case_studies/`: ready-to-run examples
-	- `case_studies/finance/yfinance_case.py`: interactive Yahoo Finance case study
-	- `case_studies/environmental_health_case.py`: ozone concentration vs mortality example
-- `case_studies/market_regime_case.py`: SPY vs VIX market-regime example
-	- `case_studies/macro_regime_case.py`: inflation vs unemployment macro example
-- `main.py`: thin entry point that lets you choose an example
+- `src/data_loader.py`: Yahoo Finance and CSV loading helpers
+- `src/preprocessing.py`: returns, log returns, smoothing, downsampling, and z-score standardization
+- `src/stationarity.py`: ADF / unit-root testing and optional differencing
+- `src/causal_analysis.py`: DTW, Granger causality, transfer entropy, CCM, and parameter-sweep summaries
+- `src/surrogate.py`: shuffle and bootstrap surrogate tests with reproducible seeds
+- `src/plotting.py`: reusable visualization helpers
+- `src/workflows.py`: interactive orchestration used by `main.py` and the notebook demo
+- `case_study/yfinance_example.ipynb`: notebook demo that calls a single shared workflow function
+- `main.py`: interactive entrypoint that lets you choose Yahoo Finance data or your own CSV data
 
 ## What the workflow does
 
-1. Runs the finance example on two Yahoo Finance tickers, the environmental/health example on ozone versus mortality data, the market-regime example on SPY versus VIX, or the macro-regime example on inflation versus unemployment.
-2. Applies optional downsampling, smoothing, and lagged cross-correlation for the non-finance examples as well.
-3. Runs ADF stationarity checks and differences the series if needed.
-4. Computes DTW, Granger causality, transfer entropy, and CCM.
-5. Optionally searches TE/CCM parameter combinations and plots results.
-6. Runs shuffle or bootstrap surrogate tests with a user-provided random seed.
+1. Lets you choose the data source first: Yahoo Finance or your own CSV files.
+	Yahoo Finance data are aligned on shared timestamps; CSV inputs can use row order or an optional time/index column.
+2. Lets you choose raw prices, simple returns, or log returns, then optionally smooth, downsample, and z-score the series.
+3. Runs ADF / unit-root checks and can difference non-stationary series if you want.
+4. Computes DTW on the processed series, then optionally runs lagged cross-correlation.
+5. Runs Granger causality without plotting by default.
+6. Sweeps TE and CCM across separate lag and embedding-dimension ranges, then prints text reports instead of heatmaps.
+7. Runs shuffle or bootstrap surrogate tests for the best TE and CCM parameter combinations.
 
 ## Install
 
 ```bash
-python -m pip install -r requirements.txt
+python -m pip install -r requirement.txt
 ```
 
 ## Run
@@ -39,4 +37,4 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-The finance case study is currently the main example. Additional domain-specific case studies can be added under `case_studies/` without changing the core toolkit.
+For the notebook demo, open `case_study/yfinance_example.ipynb` and run the single demo cell after editing the example tickers if needed.

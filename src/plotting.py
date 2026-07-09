@@ -1,4 +1,8 @@
-# Reusable plotting helpers for the toolkit.
+"""Compatibility wrapper for plotting helpers.
+
+The explicit plotting API will live here during the refactor, while existing
+imports continue to work.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +11,18 @@ import pandas as pd
 
 
 def plot_series_comparison(before: pd.Series, after: pd.Series, title: str, label_before: str, label_after: str) -> None:
-    # Plot a before/after comparison for preprocessing steps.
-    common_index = before.index.intersection(after.index)
     plt.figure(figsize=(10, 4))
-    plt.plot(before.loc[common_index].index, before.loc[common_index].values, alpha=0.5, label=label_before)
-    plt.plot(after.loc[common_index].index, after.loc[common_index].values, "-r", label=label_after)
+    plt.plot(before.index, before.values, alpha=0.5, label=label_before)
+    plt.plot(after.index, after.values, "-r", label=label_after)
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_single_series(series: pd.Series, title: str, label: str) -> None:
+    plt.figure(figsize=(10, 4))
+    plt.plot(series.index, series.values, label=label)
     plt.title(title)
     plt.legend()
     plt.tight_layout()
@@ -19,7 +30,6 @@ def plot_series_comparison(before: pd.Series, after: pd.Series, title: str, labe
 
 
 def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, label_one: str, label_two: str) -> None:
-    # Plot a DTW alignment path and an optional cost matrix.
     common_index = series_one.index.intersection(series_two.index)
     try:
         index_one = alignment.index1
@@ -66,7 +76,6 @@ def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, 
 
 
 def plot_parameter_heatmap(frame: pd.DataFrame, value_column: str, x_column: str, y_column: str, title: str) -> None:
-    # Plot a heatmap from a grid-search DataFrame.
     pivot = frame.pivot(index=y_column, columns=x_column, values=value_column)
     plt.figure(figsize=(8, 6))
     plt.imshow(pivot.values, origin="lower", aspect="auto", cmap="magma")
@@ -80,14 +89,63 @@ def plot_parameter_heatmap(frame: pd.DataFrame, value_column: str, x_column: str
     plt.show()
 
 
-def plot_line_trend(frame: pd.DataFrame, x_column: str, y_columns: list[str], title: str, xlabel: str, ylabel: str) -> None:
-    # Plot one or more line trends from a DataFrame.
+def plot_line_trend(
+    frame: pd.DataFrame,
+    x_column: str,
+    y_columns: list[str],
+    title: str,
+    xlabel: str,
+    ylabel: str,
+    series_labels: dict[str, str] | None = None,
+) -> None:
     plt.figure(figsize=(8, 5))
     for column in y_columns:
-        plt.plot(frame[x_column], frame[column], marker="o", label=column)
+        label = series_labels.get(column, column) if series_labels else column
+        plt.plot(frame[x_column], frame[column], marker="o", label=label)
     plt.title(title)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+
+def plot_preprocessing_results(before: pd.Series, after: pd.Series, title: str, label_before: str, label_after: str) -> None:
+    plot_series_comparison(before, after, title, label_before, label_after)
+
+
+def plot_granger_results(frame: pd.DataFrame, title: str = "Granger causality by lag") -> None:
+    plt.figure(figsize=(8, 5))
+    for direction, direction_frame in frame.groupby("direction"):
+        plt.plot(direction_frame["lag"], direction_frame["f_stat"], marker="o", label=direction)
+    plt.title(title)
+    plt.xlabel("Lag")
+    plt.ylabel("F-statistic")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_te_heatmap(frame: pd.DataFrame, value_column: str = "one_two", title: str = "Transfer entropy heatmap") -> None:
+    plot_parameter_heatmap(frame, value_column=value_column, x_column="embed_dim", y_column="lag", title=title)
+
+
+def plot_ccm_heatmap(frame: pd.DataFrame, value_column: str = "one_two", title: str = "CCM heatmap") -> None:
+    plot_parameter_heatmap(frame, value_column=value_column, x_column="embed_dim", y_column="lag", title=title)
+
+
+def plot_ccm_convergence(
+    frame: pd.DataFrame,
+    title: str = "CCM convergence",
+    label_one_to_two: str = "one_two",
+    label_two_to_one: str = "two_one",
+) -> None:
+    plot_line_trend(
+        frame,
+        "fraction",
+        ["one_two", "two_one"],
+        title,
+        "Library fraction",
+        "CCM score",
+        series_labels={"one_two": label_one_to_two, "two_one": label_two_to_one},
+    )
