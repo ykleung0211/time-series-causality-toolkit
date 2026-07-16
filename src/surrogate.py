@@ -1,4 +1,4 @@
-# Surrogate testing helpers for causality metrics.
+"""Surrogate testing helpers for causality metrics."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import numpy as np
 
 @dataclass(slots=True)
 class SurrogateResult:
-    # Container for surrogate test output.
+    """Container for surrogate test output."""
 
     method: str
     real: float
@@ -22,7 +22,7 @@ class SurrogateResult:
 
 
 def make_rng(seed: int | None) -> np.random.Generator:
-    # Create a reproducible NumPy random generator.
+    """Create a reproducible NumPy random generator."""
     return np.random.default_rng(seed)
 
 
@@ -71,8 +71,10 @@ def run_surrogate_test(
     return result
 
 
-def print_surrogate_summary(metric_name: str, direction: str, result: SurrogateResult) -> None:
-    # Print the most relevant surrogate output for the selected method.
+def print_surrogate_summary(metric_name: str, direction: str, result: SurrogateResult, verbose: bool = False) -> None:
+    """Print the most relevant surrogate output for the selected method."""
+    if not verbose:
+        return
     values = result.surrogates
     surrogate_mean = float(np.mean(values)) if len(values) else None
     surrogate_median = float(np.median(values)) if len(values) else None

@@ -1,4 +1,4 @@
-# Stationarity and unit-root diagnostics.
+"""Stationarity and unit-root diagnostics."""
 
 from __future__ import annotations
 
@@ -50,8 +50,10 @@ def adf_unit_root_test(series: pd.Series, series_name: str, alpha: float = 0.05)
     return result
 
 
-def print_adf_summary(result: dict[str, object], alpha: float) -> None:
-    # Print a compact ADF report.
+def print_adf_summary(result: dict[str, object], alpha: float, verbose: bool = False) -> None:
+    """Print a compact ADF report when verbose output is enabled."""
+    if not verbose:
+        return
     print("\n" + "-" * 80)
     print(f"ADF / unit-root test summary for {result['name']}")
     print("-" * 80)
@@ -76,15 +78,16 @@ def make_series_stationary(
     series_name: str,
     alpha: float = 0.05,
     max_diff_order: int = 2,
+    verbose: bool = False,
 ) -> tuple[pd.Series, dict[str, object]]:
-    # Difference a series until the ADF test accepts stationarity or the limit is reached.
+    """Difference a series until the ADF test accepts stationarity or the limit is reached."""
     current = pd.Series(series).dropna()
     diff_order = 0
 
     while diff_order <= max_diff_order:
         stage_name = f"{series_name} (diff order {diff_order})"
         adf_result = adf_unit_root_test(current, stage_name, alpha=alpha)
-        print_adf_summary(adf_result, alpha)
+        print_adf_summary(adf_result, alpha, verbose=verbose)
 
         if not adf_result["valid"]:
             return current, {"valid": False, "stationary": False, "diff_order": diff_order, "reason": adf_result["reason"]}

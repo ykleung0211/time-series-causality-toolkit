@@ -1,7 +1,8 @@
 """Data-loading helpers for the causality toolkit.
 
-This module centralizes explicit data-source handling so the toolkit can work
-with Yahoo Finance data, CSV files, or user-provided arrays/Series.
+This module centralizes the non-interactive loading primitives used by the
+toolkit so workflows, notebooks, and CLI entry points can share the same data
+source handling.
 """
 
 from __future__ import annotations
@@ -25,49 +26,12 @@ class LoadedSeriesPair:
     right_name: str
 
 
-def _prompt_nonempty(prompt: str, default: str | None = None) -> str:
-    while True:
-        suffix = f" [{default}]" if default else ""
-        answer = input(f"{prompt}{suffix}: ").strip()
-        if answer:
-            return answer
-        if default is not None:
-            return default
-        print("Input cannot be empty. Please try again.")
-
-
 def _validate_date(text: str) -> pd.Timestamp | None:
     try:
         value = pd.to_datetime(text, errors="raise")
     except Exception:
         return None
     return None if pd.isna(value) else pd.Timestamp(value)
-
-
-def _is_valid_ticker(ticker: str) -> bool:
-    try:
-        frame = yf.download(ticker, period="5d", progress=False, auto_adjust=False)
-    except Exception:
-        return False
-    return not frame.empty
-
-
-def get_ticker_input() -> tuple[str, str]:
-    """Prompt for two tickers and re-ask until both appear valid."""
-    print("Enter two ticker symbols to analyze. Examples: ^IXIC, ^GSPC, AAPL, MSFT.")
-    while True:
-        ticker_one = _prompt_nonempty("First ticker")
-        ticker_two = _prompt_nonempty("Second ticker")
-        if ticker_one == ticker_two:
-            print("The two tickers must be different. Please enter two distinct symbols.")
-            continue
-        if not _is_valid_ticker(ticker_one):
-            print(f"Ticker '{ticker_one}' could not be validated from Yahoo Finance. Please try again.")
-            continue
-        if not _is_valid_ticker(ticker_two):
-            print(f"Ticker '{ticker_two}' could not be validated from Yahoo Finance. Please try again.")
-            continue
-        return ticker_one, ticker_two
 
 
 def get_ticker_name(ticker: str) -> str:
@@ -78,34 +42,6 @@ def get_ticker_name(ticker: str) -> str:
         return name if name else ticker
     except Exception:
         return ticker
-
-
-def prompt_optional_series_names(default_one: str, default_two: str) -> tuple[str, str]:
-    """Prompt for optional display names and fall back to useful defaults."""
-    name_one = input(f"Optional display name for first series [{default_one}]: ").strip() or default_one
-    name_two = input(f"Optional display name for second series [{default_two}]: ").strip() or default_two
-    return name_one, name_two
-
-
-def get_date_range() -> tuple[str, str]:
-    """Prompt for a valid date range and re-ask on invalid input."""
-    print("Specify analysis date range. Press Enter to use default (2015-01-01 to today).")
-    while True:
-        start_text = input("Start date (YYYY-MM-DD) [2015-01-01]: ").strip() or "2015-01-01"
-        end_text = input("End date (YYYY-MM-DD) [today]: ").strip() or pd.Timestamp.today().strftime("%Y-%m-%d")
-
-        start_ts = _validate_date(start_text)
-        end_ts = _validate_date(end_text)
-        if start_ts is None:
-            print(f"Invalid start date '{start_text}'. Please try again.")
-            continue
-        if end_ts is None:
-            print(f"Invalid end date '{end_text}'. Please try again.")
-            continue
-        if start_ts > end_ts:
-            print("Start date is after end date. Please enter them again in chronological order.")
-            continue
-        return start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")
 
 
 def download_yfinance_series(
@@ -149,17 +85,6 @@ def download_yfinance_series(
     right = pd.Series(right_source, index=close.index, name=right_name).dropna()
     common_index = left.index.intersection(right.index)
     return LoadedSeriesPair(left=left.loc[common_index], right=right.loc[common_index], left_name=left_name, right_name=right_name)
-
-
-def prompt_yfinance_series() -> LoadedSeriesPair:
-    """Interactively collect Yahoo Finance inputs and download aligned series."""
-    ticker_one, ticker_two = get_ticker_input()
-    start, end = get_date_range()
-    default_one = get_ticker_name(ticker_one)
-    default_two = get_ticker_name(ticker_two)
-    name_one, name_two = prompt_optional_series_names(default_one, default_two)
-    print(f"Downloading {ticker_one} and {ticker_two} from {start} to {end}...")
-    return download_yfinance_series(ticker_one, ticker_two, start, end, name_one=name_one, name_two=name_two)
 
 
 def load_two_series_from_csv(

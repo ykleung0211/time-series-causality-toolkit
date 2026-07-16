@@ -2,10 +2,58 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
-from src.plotting import plot_line_trend, plot_preprocessing_results, plot_single_series
+from .plotting import plot_line_trend, plot_preprocessing_results, plot_single_series
+
+
+@dataclass(frozen=True)
+class PreprocessingConfig:
+    """Configuration for transforming a pair of aligned series.
+
+    Attributes:
+        base_representation: The representation to use before optional steps.
+            Supported values are ``"raw"``, ``"returns"``, and ``"log_returns"``.
+        smoothing_window: Optional centered rolling window size.
+        downsample_step: Optional integer step for row-wise downsampling.
+        downsample_freq: Optional pandas frequency alias for datetime-indexed
+            series.
+        standardize: Whether to z-score the final series.
+    """
+
+    base_representation: str = "log_returns"
+    smoothing_window: int | None = None
+    downsample_step: int | None = None
+    downsample_freq: str | None = None
+    standardize: bool = False
+
+
+@dataclass(frozen=True)
+class PreprocessingResult:
+    """Structured output of a preprocessing run.
+
+    Attributes:
+        left: The processed left-hand series.
+        right: The processed right-hand series.
+        left_label: Final display label for the left-hand series.
+        right_label: Final display label for the right-hand series.
+        summary_left: Summary dictionary for the left-hand series.
+        summary_right: Summary dictionary for the right-hand series.
+        operations: Ordered list of transformations applied.
+        config: The configuration used to produce the result.
+    """
+
+    left: pd.Series
+    right: pd.Series
+    left_label: str
+    right_label: str
+    summary_left: dict[str, object]
+    summary_right: dict[str, object]
+    operations: list[str]
+    config: PreprocessingConfig
 
 
 def compute_returns(series: pd.Series) -> pd.Series:
@@ -86,147 +134,105 @@ def summarize_preprocessing(before: pd.Series, after: pd.Series, before_label: s
     }
 
 
-def _prompt_bool(question: str, default: bool = False) -> bool:
-    suffix = "[Y/n]" if default else "[y/N]"
-    answer = input(f"{question} {suffix}: ").strip().lower()
-    if not answer:
-        return default
-    return answer in {"y", "yes"}
+def _apply_base_representation(series: pd.Series, base_representation: str) -> tuple[pd.Series, str]:
+    cleaned = pd.Series(series).dropna()
+    if base_representation == "raw":
+        return cleaned, "raw values"
+    if base_representation == "returns":
+        return compute_returns(cleaned), "percentage changes"
+    if base_representation == "log_returns":
+        return compute_log_returns(cleaned), "log changes"
+    raise ValueError("base_representation must be one of 'raw', 'returns', or 'log_returns'.")
 
 
-def _prompt_choice(question: str, choices: list[str], default_index: int = 0) -> int:
-    print(question)
-    for index, choice in enumerate(choices, start=1):
-        default_suffix = " (default)" if index - 1 == default_index else ""
-        print(f"  {index}. {choice}{default_suffix}")
-    answer = input(f"Select 1-{len(choices)} [{default_index + 1}]: ").strip()
-    if not answer:
-        return default_index
-    try:
-        selected = int(answer) - 1
-    except ValueError:
-        return default_index
-    return selected if 0 <= selected < len(choices) else default_index
+def _apply_optional_smoothing(series: pd.Series, window: int | None) -> tuple[pd.Series, str | None]:
+    if window is None:
+        return series, None
+    smoothed = smooth_series(series, window=window)
+    return smoothed, f"smoothed(window={window})"
 
 
-def _prompt_int(question: str, default: int) -> int:
-    answer = input(f"{question} [{default}]: ").strip()
-    if not answer:
-        return default
-    try:
-        return int(answer)
-    except ValueError:
-        print(f"Invalid input. Using default {default}.")
-        return default
+def _apply_optional_downsampling(series: pd.Series, step: int | None, freq: str | None) -> tuple[pd.Series, str | None]:
+    if freq:
+        return downsample_series(series, freq=freq), f"downsampled(freq='{freq}')"
+    if step and step > 1:
+        return downsample_series(series, step=step), f"downsampled(step={step})"
+    return series, None
 
 
-def run_preprocessing_flow(
+def preprocess_series_pair(
     series_one: pd.Series,
     series_two: pd.Series,
     label_one: str,
     label_two: str,
-) -> tuple[pd.Series, pd.Series, dict[str, object], dict[str, object]]:
-    """Interactively choose preprocessing steps for two series.
+    config: PreprocessingConfig,
+) -> PreprocessingResult:
+    """Apply a preprocessing configuration to two aligned series.
 
-    The flow keeps the transformation names explicit so downstream labels clearly
-    show whether the data are raw values, percentage changes, log changes,
-    smoothed, downsampled, or z-scored.
+    The function does not prompt for input or print output. It returns the
+    transformed series, final labels, and structured summaries for notebook or
+    workflow consumption.
     """
-    if _prompt_bool(f"Plot the raw series for {label_one} and {label_two} on separate charts?", default=True):
-        plot_single_series(series_one, f"Raw series: {label_one}", label_one)
-        plot_single_series(series_two, f"Raw series: {label_two}", label_two)
+    processed_one, base_label = _apply_base_representation(series_one, config.base_representation)
+    processed_two, _ = _apply_base_representation(series_two, config.base_representation)
+    operations = [base_label]
 
-    base_choice = _prompt_choice(
-        "Choose the base representation for both series",
-        ["raw values", "percentage changes", "log changes"],
-        default_index=2,
-    )
-    if base_choice == 0:
-        processed_one = pd.Series(series_one).dropna()
-        processed_two = pd.Series(series_two).dropna()
-        steps = ["raw values"]
-    elif base_choice == 1:
-        processed_one = compute_returns(series_one)
-        processed_two = compute_returns(series_two)
-        steps = ["percentage changes"]
-    else:
-        processed_one = compute_log_returns(series_one)
-        processed_two = compute_log_returns(series_two)
-        steps = ["log changes"]
+    processed_one, smoothing_label = _apply_optional_smoothing(processed_one, config.smoothing_window)
+    processed_two, _ = _apply_optional_smoothing(processed_two, config.smoothing_window)
+    if smoothing_label is not None:
+        operations.append(smoothing_label)
 
-    if _prompt_bool("Apply smoothing before the causal analysis?", default=False):
-        window = _prompt_int("Smoothing window size", 5)
-        before_one = processed_one
-        before_two = processed_two
-        processed_one = smooth_series(processed_one, window=window)
-        processed_two = smooth_series(processed_two, window=window)
-        steps.append(f"smoothed(window={window})")
-        if _prompt_bool("Plot the smoothing comparison now?", default=True):
-            plot_preprocessing_results(before_one, processed_one, f"Smoothing comparison: {label_one}", label_one, f"{label_one} smoothed")
-            plot_preprocessing_results(before_two, processed_two, f"Smoothing comparison: {label_two}", label_two, f"{label_two} smoothed")
+    processed_one, downsample_label = _apply_optional_downsampling(processed_one, config.downsample_step, config.downsample_freq)
+    processed_two, _ = _apply_optional_downsampling(processed_two, config.downsample_step, config.downsample_freq)
+    if downsample_label is not None:
+        operations.append(downsample_label)
 
-    if _prompt_bool("Apply downsampling before the causal analysis?", default=False):
-        downsample_mode = _prompt_choice(
-            "Choose a downsampling mode",
-            ["every Nth observation", "calendar frequency alias (for datetime indexes)"],
-            default_index=0,
-        )
-        before_one = processed_one
-        before_two = processed_two
-        if downsample_mode == 0:
-            step = _prompt_int("Keep every Nth observation", 2)
-            processed_one = downsample_series(processed_one, step=step)
-            processed_two = downsample_series(processed_two, step=step)
-            steps.append(f"downsampled(step={step})")
-        else:
-            freq = input("Enter pandas frequency alias (for example, W, M, or Q) [W]: ").strip() or "W"
-            processed_one = downsample_series(processed_one, freq=freq)
-            processed_two = downsample_series(processed_two, freq=freq)
-            steps.append(f"downsampled(freq='{freq}')")
-        if _prompt_bool("Plot the downsampling comparison now?", default=True):
-            plot_preprocessing_results(before_one, processed_one, f"Downsampling comparison: {label_one}", label_one, f"{label_one} downsampled")
-            plot_preprocessing_results(before_two, processed_two, f"Downsampling comparison: {label_two}", label_two, f"{label_two} downsampled")
-
-    if _prompt_bool("Apply z-score standardization (subtract mean, divide by standard deviation)?", default=False):
+    if config.standardize:
         processed_one = standardize_series(processed_one)
         processed_two = standardize_series(processed_two)
-        steps.append("z-scored")
+        operations.append("z-scored")
 
     common_index = processed_one.index.intersection(processed_two.index)
     processed_one = processed_one.loc[common_index]
     processed_two = processed_two.loc[common_index]
 
-    label_suffix = steps[0] if len(steps) == 1 else ", ".join(steps)
+    label_suffix = operations[0] if len(operations) == 1 else ", ".join(operations)
     final_label_one = f"{label_one} ({label_suffix})"
     final_label_two = f"{label_two} ({label_suffix})"
     summary_one = summarize_preprocessing(series_one, processed_one, label_one, final_label_one)
     summary_two = summarize_preprocessing(series_two, processed_two, label_two, final_label_two)
-    summary_one["operations"] = steps
-    summary_two["operations"] = steps
-    return processed_one, processed_two, summary_one, summary_two
+    summary_one["operations"] = operations
+    summary_two["operations"] = operations
+    return PreprocessingResult(
+        left=processed_one,
+        right=processed_two,
+        left_label=final_label_one,
+        right_label=final_label_two,
+        summary_left=summary_one,
+        summary_right=summary_two,
+        operations=operations,
+        config=config,
+    )
 
 
-def prompt_lagged_cross_correlation(
+def lagged_cross_correlation_report(
     series_one: pd.Series,
     series_two: pd.Series,
     label_one: str,
     label_two: str,
     max_lag: int = 30,
-) -> pd.DataFrame | None:
-    """Ask whether to plot lagged cross-correlation and return the computed frame."""
-    answer = input(f"Do you want to plot lagged cross-correlation (LCC) for {label_one} vs {label_two}? [y/N]: ").strip().lower()
-    if answer not in {"y", "yes"}:
-        return None
+) -> pd.DataFrame:
+    """Compute lagged cross-correlation and produce a plot-friendly frame.
 
+    The function does not prompt for input. Callers can inspect the returned
+    frame or decide whether to plot it.
+    """
     frame = lagged_cross_correlation(series_one, series_two, max_lag=max_lag)
     valid = frame["correlation"].dropna()
     if valid.empty:
-        print(f"No valid LCC values were produced for {label_one} vs {label_two}.")
         return frame
 
     best_index = valid.abs().idxmax()
-    best_row = frame.loc[best_index]
-    print(f"Peak absolute LCC at lag {int(best_row['lag'])}: {best_row['correlation']:.6f}")
     plot_line_trend(
         frame,
         "lag",
