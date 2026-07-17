@@ -29,7 +29,6 @@ def plot_single_series(series: pd.Series, title: str, label: str) -> None:
 
 def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, label_one: str, label_two: str) -> None:
     """Plot a DTW warping path and cost matrix when available."""
-    common_index = series_one.index.intersection(series_two.index)
     try:
         index_one = alignment.index1
         index_two = alignment.index2
@@ -46,13 +45,13 @@ def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, 
         n_samples = min(200, len(index_one))
         sampled = list(range(0, len(index_one), max(1, len(index_one) // n_samples)))[:n_samples]
         plt.figure(figsize=(12, 5))
-        plt.plot(common_index, series_one.loc[common_index].values, label=label_one)
-        plt.plot(common_index, series_two.loc[common_index].values, label=label_two)
+        plt.plot(series_one.index, series_one.values, label=label_one)
+        plt.plot(series_two.index, series_two.values, label=label_two)
         for point in sampled:
-            x_one = common_index[index_one[point]]
-            x_two = common_index[index_two[point]]
-            y_one = series_one.loc[x_one]
-            y_two = series_two.loc[x_two]
+            x_one = series_one.index[index_one[point]]
+            x_two = series_two.index[index_two[point]]
+            y_one = series_one.iloc[index_one[point]]
+            y_two = series_two.iloc[index_two[point]]
             plt.plot([x_one, x_two], [y_one, y_two], color="gray", alpha=0.3)
         plt.title(f"DTW alignment lines ({label_one} vs {label_two})")
         plt.legend()

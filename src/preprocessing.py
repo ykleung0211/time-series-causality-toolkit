@@ -56,6 +56,31 @@ class PreprocessingResult:
     config: PreprocessingConfig
 
 
+def preprocess_single_series(series: pd.Series, config: PreprocessingConfig) -> tuple[pd.Series, dict[str, object]]:
+    """Apply preprocessing steps to a single series and return metadata about the transform."""
+    processed, base_label = _apply_base_representation(series, config.base_representation)
+    operations = [base_label]
+
+    processed, smoothing_label = _apply_optional_smoothing(processed, config.smoothing_window)
+    if smoothing_label is not None:
+        operations.append(smoothing_label)
+
+    processed, downsample_label = _apply_optional_downsampling(processed, config.downsample_step, config.downsample_freq)
+    if downsample_label is not None:
+        operations.append(downsample_label)
+
+    if config.standardize:
+        processed = standardize_series(processed)
+        operations.append("z-scored")
+
+    metadata = {
+        "operations": operations,
+        "base_representation": config.base_representation,
+        "output_length": int(len(pd.Series(processed).dropna())),
+    }
+    return processed, metadata
+
+
 def compute_returns(series: pd.Series) -> pd.Series:
     """Compute simple percentage returns for a numeric series."""
     cleaned = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
@@ -97,9 +122,8 @@ def downsample_series(series: pd.Series, step: int | None = None, freq: str | No
 
 def lagged_cross_correlation(series_one: pd.Series, series_two: pd.Series, max_lag: int = 30) -> pd.DataFrame:
     """Compute Pearson correlation across a symmetric lag window."""
-    common_index = series_one.index.intersection(series_two.index)
-    left = pd.Series(series_one.loc[common_index]).dropna()
-    right = pd.Series(series_two.loc[common_index]).dropna()
+    left = pd.to_numeric(pd.Series(series_one), errors="coerce").reset_index(drop=True)
+    right = pd.to_numeric(pd.Series(series_two), errors="coerce").reset_index(drop=True)
 
     rows: list[dict[str, float | int]] = []
     for lag in range(-max_lag, max_lag + 1):
@@ -113,10 +137,11 @@ def lagged_cross_correlation(series_one: pd.Series, series_two: pd.Series, max_l
             aligned_left = left
             aligned_right = right
 
-        if len(aligned_left) < 2 or len(aligned_right) < 2:
+        frame = pd.DataFrame({"left": aligned_left, "right": aligned_right}).dropna()
+        if len(frame) < 2:
             correlation = np.nan
         else:
-            correlation = float(aligned_left.corr(aligned_right))
+            correlation = float(frame["left"].corr(frame["right"]))
         rows.append({"lag": lag, "correlation": correlation})
 
     return pd.DataFrame(rows)
@@ -165,44 +190,33 @@ def preprocess_series_pair(
     series_two: pd.Series,
     label_one: str,
     label_two: str,
-    config: PreprocessingConfig,
+    config: PreprocessingConfig | None = None,
+    *,
+    left_config: PreprocessingConfig | None = None,
+    right_config: PreprocessingConfig | None = None,
 ) -> PreprocessingResult:
-    """Apply a preprocessing configuration to two aligned series.
+    """Apply preprocessing independently to two series.
 
     The function does not prompt for input or print output. It returns the
     transformed series, final labels, and structured summaries for notebook or
     workflow consumption.
     """
-    processed_one, base_label = _apply_base_representation(series_one, config.base_representation)
-    processed_two, _ = _apply_base_representation(series_two, config.base_representation)
-    operations = [base_label]
+    shared_config = config or PreprocessingConfig()
+    effective_left_config = left_config or shared_config
+    effective_right_config = right_config or shared_config
 
-    processed_one, smoothing_label = _apply_optional_smoothing(processed_one, config.smoothing_window)
-    processed_two, _ = _apply_optional_smoothing(processed_two, config.smoothing_window)
-    if smoothing_label is not None:
-        operations.append(smoothing_label)
+    processed_one, left_metadata = preprocess_single_series(series_one, effective_left_config)
+    processed_two, right_metadata = preprocess_single_series(series_two, effective_right_config)
 
-    processed_one, downsample_label = _apply_optional_downsampling(processed_one, config.downsample_step, config.downsample_freq)
-    processed_two, _ = _apply_optional_downsampling(processed_two, config.downsample_step, config.downsample_freq)
-    if downsample_label is not None:
-        operations.append(downsample_label)
+    left_suffix = ", ".join(left_metadata["operations"])
+    right_suffix = ", ".join(right_metadata["operations"])
+    final_label_one = f"{label_one} ({left_suffix})"
+    final_label_two = f"{label_two} ({right_suffix})"
 
-    if config.standardize:
-        processed_one = standardize_series(processed_one)
-        processed_two = standardize_series(processed_two)
-        operations.append("z-scored")
-
-    common_index = processed_one.index.intersection(processed_two.index)
-    processed_one = processed_one.loc[common_index]
-    processed_two = processed_two.loc[common_index]
-
-    label_suffix = operations[0] if len(operations) == 1 else ", ".join(operations)
-    final_label_one = f"{label_one} ({label_suffix})"
-    final_label_two = f"{label_two} ({label_suffix})"
     summary_one = summarize_preprocessing(series_one, processed_one, label_one, final_label_one)
     summary_two = summarize_preprocessing(series_two, processed_two, label_two, final_label_two)
-    summary_one["operations"] = operations
-    summary_two["operations"] = operations
+    summary_one["operations"] = left_metadata["operations"]
+    summary_two["operations"] = right_metadata["operations"]
     return PreprocessingResult(
         left=processed_one,
         right=processed_two,
@@ -210,8 +224,8 @@ def preprocess_series_pair(
         right_label=final_label_two,
         summary_left=summary_one,
         summary_right=summary_two,
-        operations=operations,
-        config=config,
+        operations=list(dict.fromkeys(left_metadata["operations"] + right_metadata["operations"])),
+        config=shared_config,
     )
 
 

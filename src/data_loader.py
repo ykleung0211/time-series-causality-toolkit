@@ -26,6 +26,44 @@ class LoadedSeriesPair:
     right_name: str
 
 
+def _download_yfinance_single_series(
+    ticker: str,
+    start: str,
+    end: str,
+    *,
+    field: str = "Close",
+    name: str | None = None,
+    frequency: str | None = None,
+) -> pd.Series:
+    frame = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
+    if frame.empty:
+        raise RuntimeError(f"Yahoo Finance returned no data for ticker '{ticker}' and the requested date range.")
+
+    raw_field: pd.Series | pd.DataFrame | None = None
+    if isinstance(frame.columns, pd.MultiIndex):
+        if field in frame.columns.get_level_values(0):
+            raw_field = frame[field]
+        elif field in frame.columns.get_level_values(-1):
+            raw_field = frame.xs(field, axis=1, level=-1)
+    elif field in frame.columns:
+        raw_field = frame[field]
+
+    if raw_field is None:
+        raise RuntimeError(f"Yahoo Finance data for ticker '{ticker}' did not include field '{field}'.")
+
+    if isinstance(raw_field, pd.DataFrame):
+        if raw_field.shape[1] != 1:
+            raise RuntimeError(f"Yahoo Finance field '{field}' for ticker '{ticker}' resolved to multiple columns.")
+        raw_field = raw_field.iloc[:, 0]
+
+    series = pd.Series(raw_field.to_numpy(), index=pd.to_datetime(raw_field.index), name=name or get_ticker_name(ticker)).dropna()
+    if frequency:
+        if not isinstance(series.index, (pd.DatetimeIndex, pd.PeriodIndex)):
+            raise TypeError("Frequency-based resampling requires a DatetimeIndex or PeriodIndex.")
+        series = series.resample(frequency).last().dropna()
+    return series
+
+
 def _validate_date(text: str) -> pd.Timestamp | None:
     try:
         value = pd.to_datetime(text, errors="raise")
@@ -51,40 +89,45 @@ def download_yfinance_series(
     end: str,
     name_one: str | None = None,
     name_two: str | None = None,
+    *,
+    start_one: str | None = None,
+    end_one: str | None = None,
+    start_two: str | None = None,
+    end_two: str | None = None,
+    field_one: str = "Close",
+    field_two: str = "Close",
+    frequency_one: str | None = None,
+    frequency_two: str | None = None,
 ) -> LoadedSeriesPair:
-    """Download close-price data and return two aligned raw series."""
-    tickers = [ticker_one, ticker_two]
-    frame = yf.download(tickers, start=start, end=end, progress=False, auto_adjust=False)
-    if frame.empty:
-        raise RuntimeError("Yahoo Finance returned no data for the requested tickers and date range.")
+    """Download two Yahoo Finance series without intersecting their indices."""
+    effective_start_one = start_one or start
+    effective_end_one = end_one or end
+    effective_start_two = start_two or start
+    effective_end_two = end_two or end
 
-    if isinstance(frame.columns, pd.MultiIndex):
-        if "Close" not in frame.columns.get_level_values(0):
-            raise RuntimeError("Yahoo Finance data did not include close prices.")
-        close = frame["Close"].copy()
-    else:
-        close = frame[["Close"]].copy() if "Close" in frame.columns else frame.copy()
+    left = _download_yfinance_single_series(
+        ticker_one,
+        effective_start_one,
+        effective_end_one,
+        field=field_one,
+        name=name_one or get_ticker_name(ticker_one),
+        frequency=frequency_one,
+    )
+    right = _download_yfinance_single_series(
+        ticker_two,
+        effective_start_two,
+        effective_end_two,
+        field=field_two,
+        name=name_two or get_ticker_name(ticker_two),
+        frequency=frequency_two,
+    )
 
-    close = pd.DataFrame(close).dropna(how="any")
-    if close.shape[1] != 2:
-        raise RuntimeError("Failed to download two valid price series. Check the ticker symbols.")
-    close.index = pd.to_datetime(close.index)
-
-    left_name = name_one or get_ticker_name(ticker_one)
-    right_name = name_two or get_ticker_name(ticker_two)
-
-    if ticker_one in close.columns and ticker_two in close.columns:
-        left_source = close[ticker_one]
-        right_source = close[ticker_two]
-    else:
-        ordered_columns = list(close.columns)
-        left_source = close[ordered_columns[0]]
-        right_source = close[ordered_columns[1]]
-
-    left = pd.Series(left_source, index=close.index, name=left_name).dropna()
-    right = pd.Series(right_source, index=close.index, name=right_name).dropna()
-    common_index = left.index.intersection(right.index)
-    return LoadedSeriesPair(left=left.loc[common_index], right=right.loc[common_index], left_name=left_name, right_name=right_name)
+    return LoadedSeriesPair(
+        left=left,
+        right=right,
+        left_name=left.name or ticker_one,
+        right_name=right.name or ticker_two,
+    )
 
 
 def load_two_series_from_csv(
@@ -97,7 +140,7 @@ def load_two_series_from_csv(
     left_index_column: str | None = None,
     right_index_column: str | None = None,
 ) -> LoadedSeriesPair:
-    """Load two one-dimensional series from CSV files and pair them by index."""
+    """Load two one-dimensional series from CSV files."""
     left_frame = pd.read_csv(left_path)
     right_frame = pd.read_csv(right_path)
 
@@ -124,10 +167,10 @@ def load_two_series_from_csv(
         index=right_index,
         name=right_name or right_value_column,
     ).dropna()
-    common_index = left_series.index.intersection(right_series.index)
+    
     return LoadedSeriesPair(
-        left=left_series.loc[common_index],
-        right=right_series.loc[common_index],
+        left=left_series,
+        right=right_series,
         left_name=left_series.name,
         right_name=right_series.name,
     )
@@ -152,13 +195,13 @@ def coerce_two_series(
     left_name: str = "Series 1",
     right_name: str = "Series 2",
 ) -> LoadedSeriesPair:
-    """Normalize two user-provided 1-D series into aligned pandas Series objects."""
+    """Normalize two user-provided 1-D series into pandas Series objects without alignment."""
     left_series = _coerce_series(left, left_name)
     right_series = _coerce_series(right, right_name)
-    common_index = left_series.index.intersection(right_series.index)
+    
     return LoadedSeriesPair(
-        left=left_series.loc[common_index],
-        right=right_series.loc[common_index],
+        left=left_series,
+        right=right_series,
         left_name=left_series.name or left_name,
         right_name=right_series.name or right_name,
     )

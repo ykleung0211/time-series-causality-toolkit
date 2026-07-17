@@ -12,7 +12,7 @@ import yfinance as yf
 
 from .causal_analysis import (
     compute_ccm,
-    compute_dtw,
+    compute_dtw_sequence,
     compute_te,
     extract_warping_path,
     granger_direction_score,
@@ -25,13 +25,14 @@ from .causal_analysis import (
 )
 from .data_loader import LoadedSeriesPair, download_yfinance_series, get_ticker_name, load_two_series_from_csv
 from .plotting import plot_ccm_convergence, plot_dtw_alignment, plot_line_trend, plot_preprocessing_results, plot_single_series
-from .preprocessing import PreprocessingConfig, PreprocessingResult, lagged_cross_correlation, preprocess_series_pair
+from .preprocessing import PreprocessingConfig, PreprocessingResult, lagged_cross_correlation, preprocess_series_pair, preprocess_single_series
 from .stationarity import adf_unit_root_test, make_series_stationary, print_adf_summary
 from .surrogate import print_surrogate_summary, run_surrogate_test
 
 
 ALIGNMENT_MODE_COMMON_INDEX = "common_index"
 ALIGNMENT_MODE_DTW_WARPED = "dtw_warped"
+YFINANCE_FIELDS = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
 
 
 @dataclass(frozen=True)
@@ -236,21 +237,76 @@ def _prompt_data_source() -> int:
     )
 
 
-def _prompt_preprocessing_config() -> PreprocessingConfig:
+def _prompt_yfinance_field(series_label: str) -> str:
+    choice = _prompt_choice(
+        f"Choose the Yahoo Finance field to extract for {series_label}",
+        YFINANCE_FIELDS,
+        default_index=3,
+    )
+    return YFINANCE_FIELDS[choice]
+
+
+def _prompt_optional_frequency(series_label: str) -> str | None:
+    if not _prompt_bool(f"Resample {series_label} to a different frequency?", default=False):
+        return None
+    return _prompt_text("Enter a pandas frequency alias (for example, D, W, M, or Q)", "W")
+
+
+def _prompt_analysis_date_range(series_label: str | None = None) -> tuple[str, str]:
+    label_text = f" for {series_label}" if series_label else ""
+    print(f"Specify the analysis date range{label_text}. Press Enter to use the default (2015-01-01 to today).")
+    while True:
+        start_text = _prompt_date("Start date (YYYY-MM-DD)", "2015-01-01")
+        end_text = _prompt_date("End date (YYYY-MM-DD)", pd.Timestamp.today().strftime("%Y-%m-%d"))
+        start_ts = pd.to_datetime(start_text, errors="coerce")
+        end_ts = pd.to_datetime(end_text, errors="coerce")
+        if pd.isna(start_ts):
+            print(f"Invalid start date '{start_text}'. Please try again.")
+            continue
+        if pd.isna(end_ts):
+            print(f"Invalid end date '{end_text}'. Please try again.")
+            continue
+        if start_ts > end_ts:
+            print("Start date is after end date. Please enter them again in chronological order.")
+            continue
+        return start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")
+
+
+def _prompt_analysis_date_ranges() -> tuple[tuple[str, str], tuple[str, str]]:
+    same_range = _prompt_bool("Use the same date range for analysis for both series?", default=True)
+    if same_range:
+        common_range = _prompt_analysis_date_range()
+        return common_range, common_range
+    return _prompt_analysis_date_range("the first series"), _prompt_analysis_date_range("the second series")
+
+
+def _slice_series_to_date_range(series: pd.Series, start: str, end: str) -> pd.Series:
+    indexed = pd.Series(series).copy()
+    if not isinstance(indexed.index, (pd.DatetimeIndex, pd.PeriodIndex)):
+        return indexed
+    start_ts = pd.to_datetime(start, errors="coerce")
+    end_ts = pd.to_datetime(end, errors="coerce")
+    if pd.isna(start_ts) or pd.isna(end_ts):
+        return indexed
+    return indexed.loc[(indexed.index >= start_ts) & (indexed.index <= end_ts)]
+
+
+def _prompt_preprocessing_config(series_label: str | None = None) -> PreprocessingConfig:
+    target_text = f" for {series_label}" if series_label else " for this series"
     base_choice = _prompt_choice(
-        "Choose the base representation for both series",
+        f"Choose the base representation{target_text}",
         ["raw values", "percentage changes", "log changes"],
         default_index=2,
     )
     base_representation = ["raw", "returns", "log_returns"][base_choice]
 
     smoothing_window: int | None = None
-    if _prompt_bool("Apply smoothing before the causal analysis?", default=False):
+    if _prompt_bool(f"Apply smoothing before the causal analysis{target_text}?", default=False):
         smoothing_window = _prompt_int("Smoothing window size", 5)
 
     downsample_step: int | None = None
     downsample_freq: str | None = None
-    if _prompt_bool("Apply downsampling before the causal analysis?", default=False):
+    if _prompt_bool(f"Apply downsampling before the causal analysis{target_text}?", default=False):
         downsample_mode = _prompt_choice(
             "Choose a downsampling mode",
             ["every Nth observation", "calendar frequency alias (for datetime indexes)"],
@@ -261,7 +317,10 @@ def _prompt_preprocessing_config() -> PreprocessingConfig:
         else:
             downsample_freq = _prompt_text("Enter pandas frequency alias (for example, W, M, or Q)", "W")
 
-    standardize = _prompt_bool("Apply z-score standardization (subtract mean, divide by standard deviation)?", default=False)
+    standardize = _prompt_bool(
+        f"Apply z-score standardization (subtract mean, divide by standard deviation){target_text}?",
+        default=False,
+    )
     return PreprocessingConfig(
         base_representation=base_representation,
         smoothing_window=smoothing_window,
@@ -330,12 +389,30 @@ def _prompt_analysis_config() -> AnalysisConfig:
 
 def _load_yfinance_pair() -> LoadedSeriesPair:
     ticker_one, ticker_two = _prompt_ticker_pair()
-    start, end = _prompt_date_range()
     default_one = get_ticker_name(ticker_one)
     default_two = get_ticker_name(ticker_two)
     name_one, name_two = _prompt_optional_series_names(default_one, default_two)
-    loaded = download_yfinance_series(ticker_one, ticker_two, start, end, name_one=name_one, name_two=name_two)
-    print(f"Loaded {len(loaded.left)} aligned observations for {loaded.left_name} and {loaded.right_name}.")
+    (start_one, end_one), (start_two, end_two) = _prompt_analysis_date_ranges()
+    field_one = _prompt_yfinance_field(name_one)
+    field_two = _prompt_yfinance_field(name_two)
+    frequency_one = _prompt_optional_frequency(name_one)
+    frequency_two = _prompt_optional_frequency(name_two)
+    loaded = download_yfinance_series(
+        ticker_one,
+        ticker_two,
+        start_one,
+        end_one,
+        name_one=name_one,
+        name_two=name_two,
+        start_two=start_two,
+        end_two=end_two,
+        field_one=field_one,
+        field_two=field_two,
+        frequency_one=frequency_one,
+        frequency_two=frequency_two,
+    )
+    print(f"Loaded {len(loaded.left)} observations for {loaded.left_name}.")
+    print(f"Loaded {len(loaded.right)} observations for {loaded.right_name}.")
     return loaded
 
 
@@ -360,8 +437,17 @@ def _load_csv_pair() -> LoadedSeriesPair:
         left_index_column=left_index_column,
         right_index_column=right_index_column,
     )
-    print(f"Loaded {len(loaded.left)} observations for {loaded.left_name} and {loaded.right_name}.")
-    return loaded
+    (start_one, end_one), (start_two, end_two) = _prompt_analysis_date_ranges()
+    filtered_left = _slice_series_to_date_range(loaded.left, start_one, end_one)
+    filtered_right = _slice_series_to_date_range(loaded.right, start_two, end_two)
+    print(f"Loaded {len(filtered_left)} observations for {loaded.left_name}.")
+    print(f"Loaded {len(filtered_right)} observations for {loaded.right_name}.")
+    return LoadedSeriesPair(
+        left=filtered_left,
+        right=filtered_right,
+        left_name=loaded.left_name,
+        right_name=loaded.right_name,
+    )
 
 
 def _resolve_surrogate_methods(choice: str) -> list[str]:
@@ -388,26 +474,62 @@ def run_preprocessing_flow(
         plot_single_series(series_one, f"Raw series: {label_one}", label_one)
         plot_single_series(series_two, f"Raw series: {label_two}", label_two)
 
-    effective_config = config or _prompt_preprocessing_config()
-    result = preprocess_series_pair(series_one, series_two, label_one, label_two, effective_config)
+    same_preprocessing = _prompt_bool("Use the same preprocessing for both series?", default=True)
+    if same_preprocessing:
+        effective_config = config or _prompt_preprocessing_config()
+        result = preprocess_series_pair(series_one, series_two, label_one, label_two, effective_config)
+        base_result = preprocess_series_pair(
+            series_one,
+            series_two,
+            label_one,
+            label_two,
+            PreprocessingConfig(base_representation=effective_config.base_representation),
+        )
+    else:
+        left_config = _prompt_preprocessing_config(label_one)
+        right_config = _prompt_preprocessing_config(label_two)
+        result = preprocess_series_pair(
+            series_one,
+            series_two,
+            label_one,
+            label_two,
+            left_config=left_config,
+            right_config=right_config,
+        )
+        base_left, _ = preprocess_single_series(series_one, PreprocessingConfig(base_representation=left_config.base_representation))
+        base_right, _ = preprocess_single_series(series_two, PreprocessingConfig(base_representation=right_config.base_representation))
 
     if _prompt_bool("Plot the preprocessed series comparison now?", default=True):
-        base_config = PreprocessingConfig(base_representation=effective_config.base_representation)
-        base_result = preprocess_series_pair(series_one, series_two, label_one, label_two, base_config)
-        plot_preprocessing_results(
-            base_result.left,
-            result.left,
-            f"Preprocessing comparison: {label_one}",
-            base_result.left_label,
-            result.left_label,
-        )
-        plot_preprocessing_results(
-            base_result.right,
-            result.right,
-            f"Preprocessing comparison: {label_two}",
-            base_result.right_label,
-            result.right_label,
-        )
+        if same_preprocessing:
+            plot_preprocessing_results(
+                base_result.left,
+                result.left,
+                f"Preprocessing comparison: {label_one}",
+                base_result.left_label,
+                result.left_label,
+            )
+            plot_preprocessing_results(
+                base_result.right,
+                result.right,
+                f"Preprocessing comparison: {label_two}",
+                base_result.right_label,
+                result.right_label,
+            )
+        else:
+            plot_preprocessing_results(
+                base_left,
+                result.left,
+                f"Preprocessing comparison: {label_one}",
+                f"{label_one} ({left_config.base_representation})",
+                result.left_label,
+            )
+            plot_preprocessing_results(
+                base_right,
+                result.right,
+                f"Preprocessing comparison: {label_two}",
+                f"{label_two} ({right_config.base_representation})",
+                result.right_label,
+            )
 
     return result.left, result.right, result.summary_left, result.summary_right
 
@@ -477,9 +599,19 @@ def _run_stationarity_check(
     if bool(result_one.get("stationary")) or bool(result_two.get("stationary")):
         print("Only the non-stationary series were differenced.")
 
-    common_index = stationary_one.index.intersection(stationary_two.index)
-    return stationary_one.loc[common_index], stationary_two.loc[common_index], updated_label_one, updated_label_two
+    return stationary_one, stationary_two, updated_label_one, updated_label_two
 
+def _align_by_common_index(series_one: pd.Series, series_two: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """
+    Align two series on their common index for fixed-lag analysis.
+    This is used in the "common index" alignment mode for Granger/TE/CCM.
+    """
+    common_index = series_one.index.intersection(series_two.index)
+    if len(common_index) == 0:
+        raise ValueError("The two series have no overlapping index values for common-index alignment.")
+    aligned_one = series_one.loc[common_index].sort_index()
+    aligned_two = series_two.loc[common_index].sort_index()
+    return aligned_one, aligned_two
 
 def _prepare_dtw_warped_series(
     series_one: pd.Series,
@@ -557,18 +689,35 @@ def _run_stepwise_interactive_analysis(
     downstream_two = processed_two
     if _prompt_bool("Run DTW analysis?", default=True):
         print("DTW is computed on the processed series shown above.")
-        dtw_alignment = compute_dtw(processed_one, processed_two)
+        dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
         alignment_mode = _prompt_alignment_mode()
         if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
             print("Using DTW-warped alignment for Granger/TE/CCM.")
             warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
+            # Choose one orientation for dowstream analysis
+            # e.g. align series_two onto series_one's timeline
+            downstream_one = processed_one
             downstream_two = warped_two_to_one
         else:
             print("Using common-index alignment for Granger/TE/CCM.")
+            try:
+                downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
+            except ValueError:
+                print("No overlapping index values were available; continuing without alignment.")
+                downstream_one = processed_one
+                downstream_two = processed_two
         if _prompt_bool("Plot the DTW alignment graph?", default=True):
             plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
+    else:
+        # If DTW is skipped, we still need to align the series for downstream analysis.
+        try:
+            downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
+        except ValueError:
+            # If there is no common index, fall back to original series.
+            downstream_one = processed_one
+            downstream_two = processed_two
 
     granger_report = None
     if _prompt_bool("Run Granger causality analysis?", default=True):
@@ -719,14 +868,23 @@ def _run_noninteractive_analysis(
     if config.run_lagged_cross_correlation:
         lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=30)
 
-    dtw_alignment = compute_dtw(processed_one, processed_two) if config.run_dtw else None
+    dtw_alignment = compute_dtw_sequence(processed_one, processed_two) if config.run_dtw else None
     downstream_one = processed_one
     downstream_two = processed_two
     warped_one_to_two = None
     warped_two_to_one = None
+    
     if dtw_alignment is not None and alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
         warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
+        downstream_one = processed_one
         downstream_two = warped_two_to_one
+
+    elif alignment_mode == ALIGNMENT_MODE_COMMON_INDEX:
+        try:
+            downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
+        except ValueError:
+            downstream_one = processed_one
+            downstream_two = processed_two
 
     granger_report = run_granger_causality_report(downstream_one, downstream_two, processed_label_one, processed_label_two, maxlag=config.granger_maxlag) if config.run_granger else None
     te_grid = sweep_transfer_entropy(downstream_one.values, downstream_two.values, range(2, max(2, config.te_max_embed_dim) + 1), range(1, max(1, config.te_max_lag) + 1)) if config.run_te else None
@@ -931,7 +1089,7 @@ def run_analysis_pipeline(
     alignment_mode = ALIGNMENT_MODE_COMMON_INDEX
     if config.run_dtw:
         print("DTW is computed on the processed series shown above.")
-        dtw_alignment = compute_dtw(processed_one, processed_two)
+        dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
         alignment_mode = _prompt_alignment_mode()
@@ -941,6 +1099,12 @@ def run_analysis_pipeline(
             downstream_two = warped_two_to_one
         else:
             print("Using common-index alignment for Granger/TE/CCM.")
+            try:
+                downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
+            except ValueError:
+                print("No overlapping index values were available; continuing without alignment.")
+                downstream_one = processed_one
+                downstream_two = processed_two
         if config.plot_dtw_alignment:
             plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
 
@@ -1028,7 +1192,8 @@ def run_full_analysis_for_pair(
     This is the notebook-friendly convenience wrapper for quick demos.
     """
     loaded = download_yfinance_series(ticker_one, ticker_two, start, end, name_one=name_one, name_two=name_two)
-    print(f"Loaded {len(loaded.left)} aligned observations for {loaded.left_name} and {loaded.right_name}.")
+    print(f"Loaded {len(loaded.left)} observations for {loaded.left_name}.")
+    print(f"Loaded {len(loaded.right)} observations for {loaded.right_name}.")
     pipeline_config = config or PipelineConfig()
     return execute_pipeline(
         loaded.left,
@@ -1047,14 +1212,12 @@ def run_general_workflow() -> dict[str, object]:
         loaded = _load_yfinance_pair()
     else:
         loaded = _load_csv_pair()
-
-    preprocessing_config = _prompt_preprocessing_config()
     return _run_stepwise_interactive_analysis(
         loaded.left,
         loaded.right,
         loaded.left_name,
         loaded.right_name,
-        preprocessing_config=preprocessing_config,
+        preprocessing_config=None,
     )
 
 

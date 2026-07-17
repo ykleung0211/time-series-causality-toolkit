@@ -1,8 +1,8 @@
 """Causal analysis utilities for pairs of one-dimensional time series."""
 
-from __future__ import annotations
+from __future__ import annotations 
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout 
 from io import StringIO
 import logging
 import warnings
@@ -27,32 +27,44 @@ def _coerce_1d_sequence(value: np.ndarray | pd.Series | list[float] | tuple[floa
         raise ValueError(f"{name} must not contain NaN values.")
     return array
 
+def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series):
+    """Compute DTW on the raw sequence order of two series, ignoring their index alignment.
+    
+    This is uesed in the DTW alignment mode for variable-lag style analysis.
+    """
+
+    x = np.asarray(series_one, dtype=float).reshape(-1, 1)
+    y = np.asarray(series_two, dtype=float).reshape(-1, 1)
+    if x.shape[0] == 0 or y.shape[0] == 0:
+        raise ValueError("Input series must not be empty.")
+    return dtw(x, y, dist_method="euclidean", keep_internals=True)
 
 def compute_dtw(series_one: pd.Series, series_two: pd.Series):
-    """Compute DTW for two indexed series after aligning on the common index."""
+    """Compatibility wrapper that computes DTW on raw sequence order.
+
+    The explicit fixed-lag path lives in workflow alignment helpers; this
+    function now avoids hidden index intersection so it can still be used in
+    simple positional cases or plotting.
+    """
     if not isinstance(series_one, pd.Series) or not isinstance(series_two, pd.Series):
         raise TypeError("compute_dtw expects pandas Series inputs.")
 
-    common_index = series_one.index.intersection(series_two.index)
-    if len(common_index) == 0:
-        raise ValueError("The two series have no overlapping index values.")
+    left = pd.to_numeric(pd.Series(series_one), errors="coerce").dropna().to_numpy().reshape(-1, 1)
+    right = pd.to_numeric(pd.Series(series_two), errors="coerce").dropna().to_numpy().reshape(-1, 1)
+    if left.size == 0 or right.size == 0:
+        raise ValueError("Input series must not be empty.")
 
-    frame = pd.DataFrame({
-        "left": pd.to_numeric(series_one.loc[common_index], errors="coerce"),
-        "right": pd.to_numeric(series_two.loc[common_index], errors="coerce"),
-    }).dropna()
-
-    if frame.empty:
-        raise ValueError("No overlapping non-missing values are available for DTW.")
-
-    left = frame["left"].to_numpy().reshape(-1, 1)
-    right = frame["right"].to_numpy().reshape(-1, 1)
+    # Keep internals to allow extraction of the warping path later
     return dtw(left, right, dist_method="euclidean", keep_internals=True)
+
+
+compute_dtw_sequences = compute_dtw_sequence
 
 
 def extract_warping_path(dtw_alignment) -> tuple[np.ndarray, np.ndarray]:
     """Return the DTW warping path as two integer index arrays."""
     try:
+        # Attempt to access the path via the public attributes of the DTW object
         index_one = np.asarray(dtw_alignment.index1, dtype=int)
         index_two = np.asarray(dtw_alignment.index2, dtype=int)
         if index_one.size and index_two.size:
@@ -61,6 +73,8 @@ def extract_warping_path(dtw_alignment) -> tuple[np.ndarray, np.ndarray]:
         pass
 
     try:
+        # Fallback to the internal path attribute if available
+        # path is expected to be an array of shape (n_steps, 2) with integer indices (i, j)
         path = np.asarray(dtw_alignment.path, dtype=int)
     except Exception as exc:
         raise ValueError("DTW alignment does not expose a warping path.") from exc
@@ -75,57 +89,53 @@ def warp_series_to_match(
     series_target: pd.Series,
     dtw_alignment,
 ) -> pd.Series:
-    """Warp series_source onto the index of series_target using a DTW path."""
+    """Warp series_source onto the index of series_target using a DTW path.
+    
+    This variant ignores the original index alignment and uses the DTW warping path in sequence-order space.
+    The returned series has the same index as series_target
+    """
+
     if not isinstance(series_source, pd.Series) or not isinstance(series_target, pd.Series):
         raise TypeError("warp_series_to_match expects pandas Series inputs.")
 
-    common_index = series_source.index.intersection(series_target.index)
-    if len(common_index) == 0:
-        raise ValueError("The two series have no overlapping index values.")
-
-    frame = pd.DataFrame(
-        {
-            "source": pd.to_numeric(series_source.loc[common_index], errors="coerce"),
-            "target": pd.to_numeric(series_target.loc[common_index], errors="coerce"),
-        }
-    ).dropna()
-    if frame.empty:
-        raise ValueError("No overlapping non-missing values are available for warping.")
-
+    x = pd.to_numeric(pd.Series(series_source), errors="coerce").dropna().to_numpy(dtype=float)
+    y = pd.to_numeric(pd.Series(series_target), errors="coerce").dropna().to_numpy(dtype=float)
+    if x.ndim != 1 or y.ndim != 1:
+        raise ValueError("Input series must be one-dimensional.")
+    if x.size == 0 or y.size == 0:
+        raise ValueError("Input series must not be empty.")
+    
     path_source, path_target = extract_warping_path(dtw_alignment)
     if path_source.size == 0 or path_target.size == 0:
-        raise ValueError("DTW alignment path is empty.")
-    if int(path_source.max()) >= len(frame) or int(path_target.max()) >= len(frame):
-        raise ValueError("DTW path does not match the aligned series length.")
+        raise ValueError("DTW warping path is empty.")
+    
+    # Check that the DTW path indices are compatible with the raw sequence lengths
+    if int(path_source.max()) >= x.shape[0] or int(path_target.max()) >= y.shape[0]:
+        raise ValueError("DTW path indices do not match the series lengths.")
+    
+    # For each target position j, aggregate all source positions i such that (i, j) is in the DTW path
+    warped_values = np.empty_like(y, dtype=float)
+    warped_values.fill(np.nan)
 
-    source_values = frame["source"].to_numpy()
-    warped_common = np.empty(len(frame), dtype=float)
-    warped_common.fill(np.nan)
+    for j in range(y.shape[0]):
+        matches = path_source[path_target == j]
+        if matches.size > 0:
+            warped_values[j] = np.mean(x[matches])
+        else:
+            # If there is no exact match, use nearest neighbor in the DTW path
+            nearest_idx = int(np.argmin(np.abs(path_target - j)))
+            warped_values[j] = float(x[path_source[nearest_idx]])
 
-    for target_position in range(len(frame)):
-        matches = path_source[path_target == target_position]
-        if matches.size:
-            warped_common[target_position] = float(np.mean(source_values[matches]))
-            continue
-
-        nearest_path = int(np.argmin(np.abs(path_target - target_position)))
-        warped_common[target_position] = float(source_values[path_source[nearest_path]])
-
-    warped = pd.Series(index=series_target.index, dtype=float, name=series_source.name)
-    warped.loc[frame.index] = warped_common
-    return warped.ffill().bfill()
-
-
-def compute_dtw_array(x: np.ndarray | pd.Series | list[float] | tuple[float, ...], y: np.ndarray | pd.Series | list[float] | tuple[float, ...]):
-    """Compute DTW for raw one-dimensional sequences without index alignment."""
-    left = _coerce_1d_sequence(x, "x").reshape(-1, 1)
-    right = _coerce_1d_sequence(y, "y").reshape(-1, 1)
-    return dtw(left, right, dist_method="euclidean", keep_internals=True)
-
+    warped = pd.Series(warped_values, index=pd.Series(series_target).index, name=getattr(series_source, "name", None))
+    return warped
 
 def _prepare_granger_frame(series_target: pd.Series, series_source: pd.Series) -> pd.DataFrame:
-    common_index = series_target.index.intersection(series_source.index)
-    frame = pd.DataFrame({"target": series_target.loc[common_index], "source": series_source.loc[common_index]})
+    target = pd.to_numeric(pd.Series(series_target), errors="coerce").dropna().reset_index(drop=True)
+    source = pd.to_numeric(pd.Series(series_source), errors="coerce").dropna().reset_index(drop=True)
+    limit = min(len(target), len(source))
+    if limit < 2:
+        return pd.DataFrame(columns=["target", "source"])
+    frame = pd.DataFrame({"target": target.iloc[:limit].to_numpy(), "source": source.iloc[:limit].to_numpy()})
     return frame.dropna()
 
 
