@@ -1,11 +1,15 @@
 """Causal analysis utilities for pairs of one-dimensional time series."""
 
+# Defer type-hint evaluation on older python versions
 from __future__ import annotations 
 
+# Silence warnings from crossmapy, dtw and statsmodels libraries
 from contextlib import redirect_stderr, redirect_stdout 
 from io import StringIO
 import logging
 import warnings
+
+# For parameters like embedding dimension and lag in sweep functions
 from collections.abc import Iterable
 
 import numpy as np
@@ -15,17 +19,6 @@ from dtw import dtw
 from infomeasure import transfer_entropy
 from statsmodels.tsa.stattools import grangercausalitytests
 
-
-def _coerce_1d_sequence(value: np.ndarray | pd.Series | list[float] | tuple[float, ...], name: str) -> np.ndarray:
-    """Return a one-dimensional numeric array for DTW inputs."""
-    array = np.asarray(value, dtype=float)
-    if array.ndim != 1:
-        raise ValueError(f"{name} must be one-dimensional.")
-    if array.size == 0:
-        raise ValueError(f"{name} must not be empty.")
-    if np.isnan(array).any():
-        raise ValueError(f"{name} must not contain NaN values.")
-    return array
 
 def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series):
     """Compute DTW on the raw sequence order of two series, ignoring their index alignment.
@@ -37,28 +30,9 @@ def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series):
     y = np.asarray(series_two, dtype=float).reshape(-1, 1)
     if x.shape[0] == 0 or y.shape[0] == 0:
         raise ValueError("Input series must not be empty.")
+    
+    # keep_internals-True retains the cost matrix and warping path for later extraction
     return dtw(x, y, dist_method="euclidean", keep_internals=True)
-
-def compute_dtw(series_one: pd.Series, series_two: pd.Series):
-    """Compatibility wrapper that computes DTW on raw sequence order.
-
-    The explicit fixed-lag path lives in workflow alignment helpers; this
-    function now avoids hidden index intersection so it can still be used in
-    simple positional cases or plotting.
-    """
-    if not isinstance(series_one, pd.Series) or not isinstance(series_two, pd.Series):
-        raise TypeError("compute_dtw expects pandas Series inputs.")
-
-    left = pd.to_numeric(pd.Series(series_one), errors="coerce").dropna().to_numpy().reshape(-1, 1)
-    right = pd.to_numeric(pd.Series(series_two), errors="coerce").dropna().to_numpy().reshape(-1, 1)
-    if left.size == 0 or right.size == 0:
-        raise ValueError("Input series must not be empty.")
-
-    # Keep internals to allow extraction of the warping path later
-    return dtw(left, right, dist_method="euclidean", keep_internals=True)
-
-
-compute_dtw_sequences = compute_dtw_sequence
 
 
 def extract_warping_path(dtw_alignment) -> tuple[np.ndarray, np.ndarray]:
@@ -110,19 +84,31 @@ def warp_series_to_match(
         raise ValueError("DTW warping path is empty.")
     
     # Check that the DTW path indices are compatible with the raw sequence lengths
+    # If x.shape[0] contains n elements, valid indices are in [0, n-1], so max index must be < n
     if int(path_source.max()) >= x.shape[0] or int(path_target.max()) >= y.shape[0]:
         raise ValueError("DTW path indices do not match the series lengths.")
     
-    # For each target position j, aggregate all source positions i such that (i, j) is in the DTW path
+    # Create an array to hold the warped values, initialized with NaN
     warped_values = np.empty_like(y, dtype=float)
     warped_values.fill(np.nan)
 
+    # For each target index j
     for j in range(y.shape[0]):
+        # Collect all source indices i that map to this target index j
+        # path_target == j gives a boolean mask of where the target index matches j
+        # then path_source[path_target == j] gives the corresponding source indices i
+        # so matches is an array of source indices that map to target index j
         matches = path_source[path_target == j]
+
+        # if y is shorter than x, then matches.size could be 0 or just 1
         if matches.size > 0:
+            # x[matches] gives the source values that map to target index j
+            # Average them to handle many-to-one mappings in the DTW path
             warped_values[j] = np.mean(x[matches])
         else:
-            # If there is no exact match, use nearest neighbor in the DTW path
+            # If there is no exact match (j is not in path_target), use nearest neighbor in the DTW path
+            # Find the index in path_target that is closest to j
+            # np.argmin picks the first occurrence of the minimum distance
             nearest_idx = int(np.argmin(np.abs(path_target - j)))
             warped_values[j] = float(x[path_source[nearest_idx]])
 
@@ -142,8 +128,13 @@ def _prepare_granger_frame(series_target: pd.Series, series_source: pd.Series) -
 def _granger_direction_report(series_target: pd.Series, series_source: pd.Series, target_name: str, source_name: str, maxlag: int) -> pd.DataFrame:
     frame = _prepare_granger_frame(series_target, series_source)
     rows: list[dict[str, float | int | str]] = []
+    
+    # If the series are too short for the specified maxlag, return an empty DataFrame with the expected columns
+    # Degree of freedom must be greater than 0
+    # Maxlag of data used maxlag number of degrees of freedom
+    # Intercept uses 1 degree of freedom, so we need at least maxlag + 2 observations to run the test
     if len(frame) < maxlag + 2:
-        return pd.DataFrame(columns=["direction", "lag", "f_stat", "p_value", "ssr_ftest_pvalue"])
+        return pd.DataFrame(columns=["direction", "lag", "f_stat", "p_value"])
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
@@ -151,6 +142,8 @@ def _granger_direction_report(series_target: pd.Series, series_source: pd.Series
             result = grangercausalitytests(frame[["target", "source"]], maxlag=maxlag, verbose=False)
 
     for lag, outputs in result.items():
+        # outputs is a tuple of (test_statistic, p_value, df_denom, df_num)
+        # ssr_ftest returns a tuple of (F-statistic, p-value, df_denom, df_num)
         statistic = outputs[0].get("ssr_ftest")
         if statistic is None:
             continue
@@ -160,7 +153,6 @@ def _granger_direction_report(series_target: pd.Series, series_source: pd.Series
                 "lag": int(lag),
                 "f_stat": float(statistic[0]),
                 "p_value": float(statistic[1]),
-                "ssr_ftest_pvalue": float(statistic[1]),
             }
         )
 
@@ -234,7 +226,7 @@ def run_granger_causality_report(
 
 
 def granger_strength(series_one: pd.Series, series_two: pd.Series, maxlag: int, verbose: bool = False) -> tuple[float, float]:
-    """Compatibility wrapper returning max F-statistics for both Granger directions."""
+    """Return the max F-statistics for both Granger directions."""
     report = run_granger_causality_report(series_one, series_two, maxlag=maxlag)
     one_to_two = report["one_to_two"]
     two_to_one = report["two_to_one"]
@@ -255,7 +247,11 @@ def granger_direction_score(series_target: pd.Series, series_source: pd.Series, 
             result = grangercausalitytests(frame[["target", "source"]], maxlag=maxlag, verbose=False)
 
     best = 0.0
+
+    # for each lag output
     for outputs in result.values():
+        # outputs is a tuple of (test_statistic, p_value, df_denom, df_num)
+        # ssr_ftest returns a tuple of (F-statistic, p-value, df_denom, df_num)
         statistic = outputs[0].get("ssr_ftest")
         if statistic is None:
             continue
@@ -265,6 +261,11 @@ def granger_direction_score(series_target: pd.Series, series_source: pd.Series, 
 
 def compute_te(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.Series, embed_dim: int, lag: int) -> float:
     """Compute ordinal transfer entropy from series_one to series_two."""
+    
+    if embed_dim < 1 or lag < 1:
+        raise ValueError(f"Embedding dimension and lag must be positive integers. Got: embed_dim={embed_dim}, lag={lag}")
+    
+    # Suppress logging from the infomeasure library to avoid cluttering output
     previous_disable_level = logging.root.manager.disable
     logging.disable(logging.ERROR)
     try:
@@ -272,25 +273,38 @@ def compute_te(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.S
             np.asarray(series_one),
             np.asarray(series_two),
             approach="ordinal",
-            embedding_dim=max(1, int(embed_dim)),
-            step_size=max(1, int(lag)),
+            embedding_dim=int(embed_dim),
+            step_size=int(lag),
         )
     finally:
+        # Restore the previous logging level to avoid affecting other parts of the program
         logging.disable(previous_disable_level)
     return float(value)
 
 
 def compute_ccm(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.Series, embed_dim: int, lag: int) -> tuple[float, float]:
     """Compute CCM directional scores for both directions."""
+    
+    if embed_dim < 1 or lag < 1:
+        raise ValueError(f"Embedding dimension and lag must be positive integers. Got: embed_dim={embed_dim}, lag={lag}")
+
+    # Convert input series to a 2D array for crossmapy and define the CCM model with specified embedding dimension and lag
     data = np.column_stack([np.asarray(series_one), np.asarray(series_two)])
-    model = ccm.ConvergeCrossMapping(embed_dim=max(1, int(embed_dim)), lag=max(1, int(lag)))
+    model = ccm.ConvergeCrossMapping(embed_dim=int(embed_dim), lag=max(1, int(lag)))
+    
+    # Suppress warnings from crossmapy and related libraries during fitting
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in sqrt")
         warnings.filterwarnings("ignore", message=".*does not have enough neighbors.*")
         with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
             model.fit(data)
     scores = model.scores
-    return float(scores[1, 0]), float(scores[0, 1])
+    # Scores is a 2x2 array
+    # scores[0, 1] is the score for series_one -> series_two
+    # scores[1, 0] is for series_two -> series_one
+    # example: scores = [[0.0, 0.5], [0.6, 0.0]]
+    # series_one -> series_two = 0.6, series_two -> series_one = 0.5
+    return float(scores[0, 1]), float(scores[1, 0])
 
 
 def sweep_transfer_entropy(
@@ -322,7 +336,7 @@ def sweep_transfer_entropy_grid(
     return sweep_transfer_entropy(series_one, series_two, range(0, max_embed_dim + 1), range(0, max_lag + 1))
 
 
-def sweep_ccm_grid(
+def sweep_ccm(
     series_one: np.ndarray | pd.Series,
     series_two: np.ndarray | pd.Series,
     embed_dims: Iterable[int],
@@ -340,14 +354,14 @@ def sweep_ccm_grid(
     return pd.DataFrame(rows)
 
 
-def sweep_ccm_grid_all(
+def sweep_ccm_grid(
     series_one: np.ndarray | pd.Series,
     series_two: np.ndarray | pd.Series,
     max_lag: int,
     max_embed_dim: int,
 ) -> pd.DataFrame:
     """Evaluate CCM for all lags in [0, max_lag] and embedding dimensions in [0, max_embed_dim]."""
-    return sweep_ccm_grid(series_one, series_two, range(0, max_embed_dim + 1), range(0, max_lag + 1))
+    return sweep_ccm(series_one, series_two, range(0, max_embed_dim + 1), range(0, max_lag + 1))
 
 
 def sweep_ccm_convergence(
@@ -364,7 +378,10 @@ def sweep_ccm_convergence(
             library_fractions = (0.2, 0.4, 0.6, 0.8, 1.0)
         else:
             fractions: list[float] = []
+            # current is the current library fraction, starting from library_step and incrementing by library_step until 1.0
             current = float(library_step)
+            
+            # Use a small epsilon to avoid floating-point precision issues when comparing to 1.0
             while current <= 1.0 + 1e-9:
                 fractions.append(round(current, 10))
                 current += float(library_step)

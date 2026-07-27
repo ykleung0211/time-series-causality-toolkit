@@ -1,9 +1,10 @@
 """Public API for the time-series causality toolkit.
 
 This package exposes the reusable data-loading, preprocessing,
-causal-analysis, surrogate testing, and plotting utilities used by case
-studies and notebooks.
+causal-analysis, surrogate testing, and plotting utilities.
 """
+
+__version__ = "0.1.0"
 
 from .data_loader import (
     LoadedSeriesPair,
@@ -27,9 +28,28 @@ from .preprocessing import (
     standardize_series,
     summarize_preprocessing,
 )
-from .stationarity import adf_unit_root_test, make_series_stationary, print_adf_summary
-from .causal_analysis import compute_ccm, compute_dtw_sequence, compute_te, extract_warping_path, granger_strength, warp_series_to_match
-from .surrogate import SurrogateResult, print_surrogate_summary, run_surrogate_test
+from .stationarity import (
+    adf_unit_root_test, 
+    make_series_stationary,
+    print_adf_summary, 
+)
+from .causal_analysis import (
+    compute_ccm,
+    compute_dtw_sequence,
+    compute_te,
+    extract_warping_path,
+    run_granger_causality_report,
+    print_parameter_sweep_report,
+    sweep_transfer_entropy,
+    sweep_ccm,
+    sweep_ccm_convergence_steps,
+    warp_series_to_match
+)
+from .surrogate import (
+    SurrogateResult,
+    print_surrogate_summary, 
+    run_surrogate_test,
+)
 from .plotting import (
     plot_ccm_convergence,
     plot_ccm_heatmap,
@@ -42,7 +62,15 @@ from .plotting import (
     plot_series_comparison,
     plot_te_heatmap,
 )
-from .workflows import AnalysisConfig, PipelineConfig, run_analysis_pipeline, run_full_analysis_for_pair, run_general_workflow, run_preprocessing_flow, run_yfinance_demo
+from .workflows import (
+    AnalysisConfig, 
+    PipelineConfig, 
+    run_analysis_pipeline, 
+    run_full_analysis_for_pair,
+    run_general_workflow,
+    run_preprocessing_flow,
+    run_yfinance_demo
+)
 
 __all__ = [
     "LoadedSeriesPair",
@@ -62,17 +90,19 @@ __all__ = [
     "preprocess_single_series",
     "smooth_series",
     "standardize_series",
-    "summarize_preprocessing",
-    "adf_unit_root_test",
-    "make_series_stationary",
-    "print_adf_summary",
+    "adf_unit_root_test", 
+    "make_series_stationary", 
     "compute_ccm",
     "compute_dtw_sequence",
     "compute_te",
     "extract_warping_path",
-    "granger_strength",
+    "run_granger_causality_report",
+    "print_parameter_sweep_report",
+    "sweep_transfer_entropy",
+    "sweep_ccm",
+    "sweep_ccm_convergence_steps",
     "warp_series_to_match",
-    "SurrogateResult",
+    "SurrogateResult", 
     "run_surrogate_test",
     "print_surrogate_summary",
     "plot_ccm_convergence",
@@ -86,11 +116,6 @@ __all__ = [
     "plot_series_comparison",
     "plot_te_heatmap",
     "AnalysisConfig",
-    "PipelineConfig",
-    "run_analysis_pipeline",
-    "run_full_analysis_for_pair",
-    "run_general_workflow",
-    "run_preprocessing_flow",
-    "run_yfinance_demo",
+    "PipelineConfig"
 ]
 

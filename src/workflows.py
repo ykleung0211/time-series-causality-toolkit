@@ -19,7 +19,7 @@ from .causal_analysis import (
     print_parameter_sweep_report,
     run_granger_causality_report,
     sweep_ccm_convergence_steps,
-    sweep_ccm_grid,
+    sweep_ccm,
     sweep_transfer_entropy,
     warp_series_to_match,
 )
@@ -41,6 +41,7 @@ class AnalysisConfig:
 
     Attributes:
         run_lagged_cross_correlation: Whether to compute lagged cross-correlation.
+        lcc_max_lag: Maximum lag to check for lagged cross-correlation.
         plot_lagged_cross_correlation: Whether to plot the LCC frame.
         run_dtw: Whether to compute DTW.
         plot_dtw_alignment: Whether to plot the DTW alignment.
@@ -63,6 +64,7 @@ class AnalysisConfig:
     """
 
     run_lagged_cross_correlation: bool = False
+    lcc_max_lag: int = 30
     plot_lagged_cross_correlation: bool = False
     run_dtw: bool = True
     plot_dtw_alignment: bool = True
@@ -333,6 +335,7 @@ def _prompt_preprocessing_config(series_label: str | None = None) -> Preprocessi
 def _prompt_analysis_config() -> AnalysisConfig:
     run_lcc = _prompt_bool("Run lagged cross-correlation (LCC) on the processed series?", default=False)
     plot_lcc = run_lcc and _prompt_bool("Plot the lagged cross-correlation chart?", default=True)
+    lcc_max_lag = _prompt_int("Maximum lag for lagged cross-correlation", 30) if run_lcc else 30
 
     run_dtw = _prompt_bool("Run DTW analysis?", default=True)
     plot_dtw = run_dtw and _prompt_bool("Plot the DTW alignment graph?", default=True)
@@ -365,6 +368,7 @@ def _prompt_analysis_config() -> AnalysisConfig:
 
     return AnalysisConfig(
         run_lagged_cross_correlation=run_lcc,
+        lcc_max_lag=lcc_max_lag,
         plot_lagged_cross_correlation=plot_lcc,
         run_dtw=run_dtw,
         plot_dtw_alignment=plot_dtw,
@@ -662,7 +666,8 @@ def _run_stepwise_interactive_analysis(
         print("Some series remain non-stationary after preprocessing. The pipeline will continue with the transformed data.")
 
     if _prompt_bool("Run lagged cross-correlation (LCC) on the processed series?", default=False):
-        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=30)
+        lcc_max_lag = _prompt_int("Maximum lag for lagged cross-correlation", 30)
+        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=lcc_max_lag)
         valid = lcc_frame["correlation"].dropna()
         if valid.empty:
             print(f"No valid LCC values were produced for {processed_label_one} vs {processed_label_two}.")
@@ -776,7 +781,7 @@ def _run_stepwise_interactive_analysis(
         if run_ccm_convergence:
             ccm_library_step = float(_prompt_text("CCM library-size step", "0.1") or "0.1")
 
-        ccm_grid = sweep_ccm_grid(
+        ccm_grid = sweep_ccm(
             downstream_one.values,
             downstream_two.values,
             range(2, max(2, ccm_max_embed_dim) + 1),
@@ -866,7 +871,7 @@ def _run_noninteractive_analysis(
 
     lcc_frame = None
     if config.run_lagged_cross_correlation:
-        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=30)
+        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=config.lcc_max_lag)
 
     dtw_alignment = compute_dtw_sequence(processed_one, processed_two) if config.run_dtw else None
     downstream_one = processed_one
@@ -888,7 +893,9 @@ def _run_noninteractive_analysis(
 
     granger_report = run_granger_causality_report(downstream_one, downstream_two, processed_label_one, processed_label_two, maxlag=config.granger_maxlag) if config.run_granger else None
     te_grid = sweep_transfer_entropy(downstream_one.values, downstream_two.values, range(2, max(2, config.te_max_embed_dim) + 1), range(1, max(1, config.te_max_lag) + 1)) if config.run_te else None
-    ccm_grid = sweep_ccm_grid(downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1)) if config.run_ccm else None
+    ccm_grid = sweep_ccm(
+        downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1)
+    ) if config.run_ccm else None
     ccm_convergence = sweep_ccm_convergence_steps(
         downstream_one.values,
         downstream_two.values,
@@ -1063,7 +1070,7 @@ def run_analysis_pipeline(
 
     lcc_frame = None
     if config.run_lagged_cross_correlation:
-        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=30)
+        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=config.lcc_max_lag)
         valid = lcc_frame["correlation"].dropna()
         if valid.empty:
             print(f"No valid LCC values were produced for {processed_label_one} vs {processed_label_two}.")
@@ -1135,7 +1142,7 @@ def run_analysis_pipeline(
         te_grid = None
 
     if config.run_ccm:
-        ccm_grid = sweep_ccm_grid(downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1))
+        ccm_grid = sweep_ccm(downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1))
         ccm_summary = print_parameter_sweep_report(ccm_grid, "ccm", processed_label_one, processed_label_two, verbose=True)
         if config.run_ccm_convergence:
             ccm_convergence = sweep_ccm_convergence_steps(
