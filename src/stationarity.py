@@ -24,8 +24,11 @@ def adf_unit_root_test(series: pd.Series, series_name: str, alpha: float = 0.05)
         "pvalue": np.nan,
         "usedlag": None,
         "crit": {},
+        "alpha": alpha,
     }
 
+    # rule-of-thumb checks for ADF test validity
+    # (20 observations could still be too few if AIC selects several lags)
     if len(cleaned) < 20:
         result["valid"] = False
         result["reason"] = "Too few observations for a reliable ADF test (need roughly >= 20)."
@@ -54,6 +57,7 @@ def print_adf_summary(result: dict[str, object], alpha: float, verbose: bool = F
     """Print a compact ADF report when verbose output is enabled."""
     if not verbose:
         return
+    effective_alpha = alpha if alpha is not None else result.get("alpha", 0.05)
     print("\n" + "-" * 80)
     print(f"ADF / unit-root test summary for {result['name']}")
     print("-" * 80)
@@ -67,9 +71,9 @@ def print_adf_summary(result: dict[str, object], alpha: float, verbose: bool = F
     print(f"Used lags:            {result['usedlag']}")
     print(f"Critical values:      {result['crit']}")
     if result["stationary"]:
-        print(f"Conclusion:           Stationary (reject unit-root null at alpha={alpha})")
+        print(f"Conclusion:           Stationary (reject unit-root null at alpha={effective_alpha})")
     else:
-        print(f"Conclusion:           Non-stationary (fail to reject unit-root null at alpha={alpha})")
+        print(f"Conclusion:           Non-stationary (fail to reject unit-root null at alpha={effective_alpha})")
     print("-" * 80)
 
 
@@ -95,6 +99,7 @@ def make_series_stationary(
             return current, {"valid": True, "stationary": True, "diff_order": diff_order, "reason": None}
 
         diff_order += 1
+        # Prevent differencing beyond the maximum allowed order
         if diff_order <= max_diff_order:
             current = current.diff().dropna()
 

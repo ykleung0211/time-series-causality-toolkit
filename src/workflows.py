@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import SimpleNamespace
+from types import SimpleNamespace # Allow creating a simple object to hold attributes without defining a full class
 
-import numpy as np
 import pandas as pd
 import yfinance as yf
 
@@ -25,7 +24,7 @@ from .causal_analysis import (
 )
 from .data_loader import LoadedSeriesPair, download_yfinance_series, get_ticker_name, load_two_series_from_csv
 from .plotting import plot_ccm_convergence, plot_dtw_alignment, plot_line_trend, plot_preprocessing_results, plot_single_series
-from .preprocessing import PreprocessingConfig, PreprocessingResult, lagged_cross_correlation, preprocess_series_pair, preprocess_single_series
+from .preprocessing import PreprocessingConfig, lagged_cross_correlation, preprocess_series_pair, preprocess_single_series
 from .stationarity import adf_unit_root_test, make_series_stationary, print_adf_summary
 from .surrogate import print_surrogate_summary, run_surrogate_test
 
@@ -89,13 +88,14 @@ class AnalysisConfig:
 @dataclass(frozen=True)
 class PipelineConfig:
     """Bundle preprocessing and analysis configuration for notebook or CLI demos."""
-
+    # default_factory is used to create a new instance of PreprocessingConfig and AnalysisConfig for each PipelineConfig instance, ensuring that each PipelineConfig has its own separate configuration objects.
     preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     analysis: AnalysisConfig = field(default_factory=AnalysisConfig)
 
 
 def _prompt_text(question: str, default: str | None = None) -> str:
     suffix = f" [{default}]" if default is not None else ""
+    # example prompt: "Enter a value [default_value]: "
     answer = input(f"{question}{suffix}: ").strip()
     if answer:
         return answer
@@ -106,6 +106,7 @@ def _prompt_text(question: str, default: str | None = None) -> str:
 
 def _prompt_bool(question: str, default: bool = False) -> bool:
     suffix = "[Y/n]" if default else "[y/N]"
+    # example prompt: "Do you want to continue? [Y/n]: "
     answer = input(f"{question} {suffix}: ").strip().lower()
     if not answer:
         return default
@@ -114,13 +115,16 @@ def _prompt_bool(question: str, default: bool = False) -> bool:
 
 def _prompt_choice(question: str, choices: list[str], default_index: int = 0) -> int:
     print(question)
+    # enumerate choices starting from 1 for user-friendly display, and indicate the default choice
     for index, choice in enumerate(choices, start=1):
         default_suffix = " (default)" if index - 1 == default_index else ""
         print(f"  {index}. {choice}{default_suffix}")
+    # example prompt: "Select 1-3 [2]: "
     answer = input(f"Select 1-{len(choices)} [{default_index + 1}]: ").strip()
     if not answer:
         return default_index
     try:
+        # convert user input to an integer and adjust for 0-based index
         selected = int(answer) - 1
     except ValueError:
         return default_index
@@ -149,12 +153,14 @@ def _prompt_surrogate_method() -> str:
 
 
 def _display_series_label(label: str) -> str:
+    # example: if label is "AAPL (Apple Inc.)", return "AAPL"
     if " (" in label and label.endswith(")"):
         return label.rsplit(" (", 1)[0]
     return label
 
 
 def _prompt_int(question: str, default: int) -> int:
+    # example prompt: "Enter an integer value [10]: "
     answer = input(f"{question} [{default}]: ").strip()
     if not answer:
         return default
@@ -175,6 +181,7 @@ def _is_valid_ticker(ticker: str) -> bool:
 
 def _prompt_nonempty(prompt: str, default: str | None = None) -> str:
     while True:
+        # the loop continues until the user provides a non-empty input or accepts the default value
         suffix = f" [{default}]" if default else ""
         answer = input(f"{prompt}{suffix}: ").strip()
         if answer:
@@ -185,27 +192,9 @@ def _prompt_nonempty(prompt: str, default: str | None = None) -> str:
 
 
 def _prompt_date(text: str, default: str) -> str:
+    # example prompt: "Enter a date (YYYY-MM-DD) [2020-01-01]: "
     answer = input(f"{text} [{default}]: ").strip()
     return answer or default
-
-
-def _prompt_date_range() -> tuple[str, str]:
-    print("Specify analysis date range. Press Enter to use default (2015-01-01 to today).")
-    while True:
-        start_text = _prompt_date("Start date (YYYY-MM-DD)", "2015-01-01")
-        end_text = _prompt_date("End date (YYYY-MM-DD)", pd.Timestamp.today().strftime("%Y-%m-%d"))
-        start_ts = pd.to_datetime(start_text, errors="coerce")
-        end_ts = pd.to_datetime(end_text, errors="coerce")
-        if pd.isna(start_ts):
-            print(f"Invalid start date '{start_text}'. Please try again.")
-            continue
-        if pd.isna(end_ts):
-            print(f"Invalid end date '{end_text}'. Please try again.")
-            continue
-        if start_ts > end_ts:
-            print("Start date is after end date. Please enter them again in chronological order.")
-            continue
-        return start_ts.strftime("%Y-%m-%d"), end_ts.strftime("%Y-%m-%d")
 
 
 def _prompt_ticker_pair() -> tuple[str, str]:
@@ -213,9 +202,6 @@ def _prompt_ticker_pair() -> tuple[str, str]:
     while True:
         ticker_one = _prompt_nonempty("First ticker")
         ticker_two = _prompt_nonempty("Second ticker")
-        if ticker_one == ticker_two:
-            print("The two tickers must be different. Please enter two distinct symbols.")
-            continue
         if not _is_valid_ticker(ticker_one):
             print(f"Ticker '{ticker_one}' could not be validated from Yahoo Finance. Please try again.")
             continue
@@ -283,6 +269,7 @@ def _prompt_analysis_date_ranges() -> tuple[tuple[str, str], tuple[str, str]]:
 
 
 def _slice_series_to_date_range(series: pd.Series, start: str, end: str) -> pd.Series:
+    # Return a copy of the series sliced to the specified date range, if the index is datetime-like. Otherwise, return the original series.
     indexed = pd.Series(series).copy()
     if not isinstance(indexed.index, (pd.DatetimeIndex, pd.PeriodIndex)):
         return indexed
@@ -291,6 +278,18 @@ def _slice_series_to_date_range(series: pd.Series, start: str, end: str) -> pd.S
     if pd.isna(start_ts) or pd.isna(end_ts):
         return indexed
     return indexed.loc[(indexed.index >= start_ts) & (indexed.index <= end_ts)]
+
+
+def _prompt_surrogate_settings() -> tuple[str, int, int]:
+    method = _prompt_surrogate_method()
+    n_surrogates = _prompt_int("Number of surrogate samples", 200)
+    seed_text = _prompt_text("Random seed for surrogate tests", "0")
+    try:
+        seed = int(seed_text)
+    except ValueError:
+        print("Invalid seed. Using 0 as the default.")
+        seed = 0
+    return method, n_surrogates, seed
 
 
 def _prompt_preprocessing_config(series_label: str | None = None) -> PreprocessingConfig:
@@ -302,9 +301,23 @@ def _prompt_preprocessing_config(series_label: str | None = None) -> Preprocessi
     )
     base_representation = ["raw", "returns", "log_returns"][base_choice]
 
+    smoothing_method: str | None = None
     smoothing_window: int | None = None
+    smoothing_sigma: float | None = None
     if _prompt_bool(f"Apply smoothing before the causal analysis{target_text}?", default=False):
-        smoothing_window = _prompt_int("Smoothing window size", 5)
+        method_choice = _prompt_choice("Choose a smoothing method", ["moving average (rolling mean)", "Gaussian smoothing (weighted average)"], default_index=0)
+        if method_choice == 0:
+            smoothing_method = "moving_average"
+            smoothing_window = _prompt_int("Smoothing window size (number of observations)", 5)
+        else:
+            smoothing_method = "gaussian"
+            smoothing_window = _prompt_int("Smoothing window size (kernel truncation width)", 5)
+            sigma_text = _prompt_text("Gaussian smoothing sigma (standard deviation)", "1.0")
+            try:
+                smoothing_sigma = float(sigma_text)
+            except ValueError:
+                print("Invalid value for Gaussian smoothing sigma. Using default value of 1.0.")
+                smoothing_sigma = 1.0
 
     downsample_step: int | None = None
     downsample_freq: str | None = None
@@ -325,7 +338,9 @@ def _prompt_preprocessing_config(series_label: str | None = None) -> Preprocessi
     )
     return PreprocessingConfig(
         base_representation=base_representation,
+        smoothing_method=smoothing_method,
         smoothing_window=smoothing_window,
+        smoothing_sigma=smoothing_sigma,
         downsample_step=downsample_step,
         downsample_freq=downsample_freq,
         standardize=standardize,
@@ -441,14 +456,9 @@ def _load_csv_pair() -> LoadedSeriesPair:
         left_index_column=left_index_column,
         right_index_column=right_index_column,
     )
-    (start_one, end_one), (start_two, end_two) = _prompt_analysis_date_ranges()
-    filtered_left = _slice_series_to_date_range(loaded.left, start_one, end_one)
-    filtered_right = _slice_series_to_date_range(loaded.right, start_two, end_two)
-    print(f"Loaded {len(filtered_left)} observations for {loaded.left_name}.")
-    print(f"Loaded {len(filtered_right)} observations for {loaded.right_name}.")
     return LoadedSeriesPair(
-        left=filtered_left,
-        right=filtered_right,
+        left=loaded.left,
+        right=loaded.right,
         left_name=loaded.left_name,
         right_name=loaded.right_name,
     )
@@ -469,11 +479,7 @@ def run_preprocessing_flow(
     label_two: str,
     config: PreprocessingConfig | None = None,
 ) -> tuple[pd.Series, pd.Series, dict[str, object], dict[str, object]]:
-    """Interactively choose preprocessing steps for two series.
-
-    The function returns the same four-item tuple as the historical API so the
-    rest of the toolkit can keep working unchanged.
-    """
+    """Interactively choose preprocessing steps for two series."""
     if _prompt_bool(f"Plot the raw series for {label_one} and {label_two} on separate charts?", default=True):
         plot_single_series(series_one, f"Raw series: {label_one}", label_one)
         plot_single_series(series_two, f"Raw series: {label_two}", label_two)
@@ -481,6 +487,8 @@ def run_preprocessing_flow(
     same_preprocessing = _prompt_bool("Use the same preprocessing for both series?", default=True)
     if same_preprocessing:
         effective_config = config or _prompt_preprocessing_config()
+        # result is the preprocessed series pair along with their summaries
+        # while base_result is the preprocessed series pair using only the base representation without any additional preprocessing steps.
         result = preprocess_series_pair(series_one, series_two, label_one, label_two, effective_config)
         base_result = preprocess_series_pair(
             series_one,
@@ -502,6 +510,13 @@ def run_preprocessing_flow(
         )
         base_left, _ = preprocess_single_series(series_one, PreprocessingConfig(base_representation=left_config.base_representation))
         base_right, _ = preprocess_single_series(series_two, PreprocessingConfig(base_representation=right_config.base_representation))
+
+    print(
+        f"After preprocessing, {label_one} has {len(result.left)} observations "
+        f"(was {len(series_one)} before preprocessing).")
+    print(
+        f"After preprocessing, {label_two} has {len(result.right)} observations "
+        f"(was {len(series_two)} before preprocessing).")
 
     if _prompt_bool("Plot the preprocessed series comparison now?", default=True):
         if same_preprocessing:
@@ -595,10 +610,12 @@ def _run_stationarity_check(
 
     if not bool(result_one.get("stationary")):
         stationary_one, info_one = make_series_stationary(series_one, label_one, verbose=True)
-        updated_label_one = f"{label_one} (stationary, diff order {info_one['diff_order']})"
+        status_word = "stationary" if info_one.get("stationary") else "still non-stationary"
+        updated_label_one = f"{label_one} ({status_word}, diff order {info_one['diff_order']})"
     if not bool(result_two.get("stationary")):
         stationary_two, info_two = make_series_stationary(series_two, label_two, verbose=True)
-        updated_label_two = f"{label_two} (stationary, diff order {info_two['diff_order']})"
+        status_word = "stationary" if info_two.get("stationary") else "still non-stationary"
+        updated_label_two = f"{label_two} ({status_word}, diff order {info_two['diff_order']})"
 
     if bool(result_one.get("stationary")) or bool(result_two.get("stationary")):
         print("Only the non-stationary series were differenced.")
@@ -656,6 +673,7 @@ def _run_stepwise_interactive_analysis(
             processed_label_one,
             processed_label_two,
         )
+        # _display_series_label is used to clean up the labels for display purposes, removing any extra information added during preprocessing or stationarity checks.
         processed_label_one = _display_series_label(processed_label_one)
         processed_label_two = _display_series_label(processed_label_two)
 
@@ -717,10 +735,12 @@ def _run_stepwise_interactive_analysis(
             plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
     else:
         # If DTW is skipped, we still need to align the series for downstream analysis.
+        print("Skipping DTW analysis.")
         try:
             downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
         except ValueError:
             # If there is no common index, fall back to original series.
+            print("No overlapping index values were available; continuing without alignment.")
             downstream_one = processed_one
             downstream_two = processed_two
 
@@ -736,14 +756,14 @@ def _run_stepwise_interactive_analysis(
             verbose=True,
         )
         if _prompt_bool("Run surrogate tests for Granger causality?", default=True):
-            surrogate_method = _prompt_surrogate_method()
+            surrogate_method, n_surrogates, seed = _prompt_surrogate_settings()
             _run_granger_surrogates(
                 downstream_one,
                 downstream_two,
                 processed_label_one,
                 processed_label_two,
                 granger_maxlag,
-                AnalysisConfig(surrogate_method=surrogate_method),
+                AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=n_surrogates, surrogate_seed=seed),
             )
 
     te_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
@@ -760,7 +780,7 @@ def _run_stepwise_interactive_analysis(
         )
         te_summary = print_parameter_sweep_report(te_grid, "transfer entropy", processed_label_one, processed_label_two, verbose=True)
         if _prompt_bool("Run surrogate tests for TE now?", default=True):
-            surrogate_method = _prompt_surrogate_method()
+            surrogate_method, n_surrogates, seed = _prompt_surrogate_settings()
             _run_metric_surrogates(
                 "TE",
                 downstream_one,
@@ -768,7 +788,7 @@ def _run_stepwise_interactive_analysis(
                 processed_label_one,
                 processed_label_two,
                 te_summary,
-                AnalysisConfig(surrogate_method=surrogate_method),
+                AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=n_surrogates, surrogate_seed=seed),
             )
     else:
         te_grid = None
@@ -805,7 +825,7 @@ def _run_stepwise_interactive_analysis(
         else:
             ccm_convergence = None
         if _prompt_bool("Run surrogate tests for CCM now?", default=True):
-            surrogate_method = _prompt_surrogate_method()
+            surrogate_method, n_surrogates, seed = _prompt_surrogate_settings()
             _run_metric_surrogates(
                 "CCM",
                 downstream_one,
@@ -813,7 +833,7 @@ def _run_stepwise_interactive_analysis(
                 processed_label_one,
                 processed_label_two,
                 ccm_summary,
-                AnalysisConfig(surrogate_method=surrogate_method),
+                AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=n_surrogates, surrogate_seed=seed),
             )
     else:
         ccm_grid = None
@@ -859,6 +879,15 @@ def _run_noninteractive_analysis(
     processed_label_one = _display_series_label(preprocessing_result.left_label)
     processed_label_two = _display_series_label(preprocessing_result.right_label)
     config = analysis_config or AnalysisConfig()
+
+    print(
+        f"After preprocessing, {processed_label_one} has {len(processed_one)} observations "
+        f"(was {len(series_one)} before preprocessing)."
+    )
+    print(
+        f"After preprocessing, {processed_label_two} has {len(processed_two)} observations "
+        f"(was {len(series_two)} before preprocessing)."
+    )
 
     stationarity_one = adf_unit_root_test(processed_one, processed_label_one)
     stationarity_two = adf_unit_root_test(processed_two, processed_label_two)
@@ -932,33 +961,20 @@ def _run_metric_surrogates(
 
     def _run_metric(direction_label: str, embed_dim: int, lag: int) -> None:
         if metric_name == "TE":
-            if direction_label == f"{label_one} -> {label_two}":
-                real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
-                base_x = series_one.values
-                base_y = series_two.values
-            else:
-                real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
-                base_x = series_two.values
-                base_y = series_one.values
+            # lamda is an anonymous function that takes two arguments x and y, and calls compute_te with those arguments along with the specified embed_dim and lag.
+            real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
         else:
-            if direction_label == f"{label_one} -> {label_two}":
-                real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[0]
-                base_x = series_one.values
-                base_y = series_two.values
-            else:
-                real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[1]
-                base_x = series_two.values
-                base_y = series_one.values
+            real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[0]
+
+        if direction_label == f"{label_one} -> {label_two}":
+            base_x = series_one.values
+            base_y = series_two.values
+        else:
+            base_x = series_two.values
+            base_y = series_one.values
 
         for method in methods:
-            result = run_surrogate_test(
-                real_func,
-                base_x,
-                base_y,
-                n_surrogates=config.n_surrogates,
-                method=method,
-                seed=config.surrogate_seed,
-            )
+            result = run_surrogate_test(real_func, base_x, base_y, n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed)
             print_surrogate_summary(metric_name, f"{direction_label} (embed_dim={embed_dim}, lag={lag})", result, verbose=True)
 
     one_to_two = summary.get("one_to_two")
@@ -975,20 +991,20 @@ def _run_granger_surrogates(series_one: pd.Series, series_two: pd.Series, label_
 
     methods = _resolve_surrogate_methods(config.surrogate_method)
 
-    def _run_direction(direction_label: str, target: pd.Series, source: pd.Series) -> None:
+    def _run_direction(direction_label: str, source: pd.Series, target: pd.Series) -> None:
         for method in methods:
             result = run_surrogate_test(
-                lambda x, y: granger_direction_score(pd.Series(x), pd.Series(y), maxlag=maxlag),
-                target.values,
+                lambda x, y: granger_direction_score(pd.Series(y), pd.Series(x), maxlag=maxlag),
                 source.values,
+                target.values,
                 n_surrogates=config.n_surrogates,
                 method=method,
                 seed=config.surrogate_seed,
             )
             print_surrogate_summary("Granger", f"{direction_label} (maxlag={maxlag})", result, verbose=True)
 
-    _run_direction(f"{label_one} -> {label_two}", series_two, series_one)
-    _run_direction(f"{label_two} -> {label_one}", series_one, series_two)
+    _run_direction(f"{label_one} -> {label_two}", series_one, series_two)
+    _run_direction(f"{label_two} -> {label_one}", series_two, series_one)
 
 
 def execute_pipeline(

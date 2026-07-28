@@ -332,8 +332,8 @@ def sweep_transfer_entropy_grid(
     max_lag: int,
     max_embed_dim: int,
 ) -> pd.DataFrame:
-    """Evaluate TE for all lags in [0, max_lag] and embedding dimensions in [0, max_embed_dim]."""
-    return sweep_transfer_entropy(series_one, series_two, range(0, max_embed_dim + 1), range(0, max_lag + 1))
+    """Evaluate TE for all lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
+    return sweep_transfer_entropy(series_one, series_two, range(2, max_embed_dim + 1), range(1, max_lag + 1))
 
 
 def sweep_ccm(
@@ -360,8 +360,8 @@ def sweep_ccm_grid(
     max_lag: int,
     max_embed_dim: int,
 ) -> pd.DataFrame:
-    """Evaluate CCM for all lags in [0, max_lag] and embedding dimensions in [0, max_embed_dim]."""
-    return sweep_ccm(series_one, series_two, range(0, max_embed_dim + 1), range(0, max_lag + 1))
+    """Evaluate CCM for all lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
+    return sweep_ccm(series_one, series_two, range(2, max_embed_dim + 1), range(1, max_lag + 1))
 
 
 def sweep_ccm_convergence(

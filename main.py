@@ -11,7 +11,8 @@ def run_full_analysis_cli() -> None:
 
 
 def main() -> None:
-    """Backward-compatible script entry point."""
+    """Main entry point for the time-series causality toolkit CLI."""
+    # It is split into a separate function so that it can be called from other entry points, such as a GUI or a web app.
     run_full_analysis_cli()
 
 

@@ -13,7 +13,7 @@ def plot_series_comparison(before: pd.Series, after: pd.Series, title: str, labe
     plt.plot(after.index, after.values, "-r", label=label_after)
     plt.title(title)
     plt.legend()
-    plt.tight_layout()
+    plt.tight_layout() # Adjusts the padding between and around subplots to minimize overlap and ensure that labels, titles, and legends are not cut off.
     plt.show()
 
 
@@ -42,16 +42,18 @@ def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, 
             index_two = None
 
     if index_one is not None and index_two is not None:
-        n_samples = min(200, len(index_one))
+        n_samples = min(200, len(index_one)) # Cap the number of alignment lines to plot for clarity
         sampled = list(range(0, len(index_one), max(1, len(index_one) // n_samples)))[:n_samples]
         plt.figure(figsize=(12, 5))
         plt.plot(series_one.index, series_one.values, label=label_one)
         plt.plot(series_two.index, series_two.values, label=label_two)
+
+        # Draw lines connecting the aligned points between the two series
         for point in sampled:
-            x_one = series_one.index[index_one[point]]
-            x_two = series_two.index[index_two[point]]
-            y_one = series_one.iloc[index_one[point]]
-            y_two = series_two.iloc[index_two[point]]
+            x_one = series_one.index[index_one[point]] # Get the x-coordinate (time index) for the aligned point in series_one
+            x_two = series_two.index[index_two[point]] # Get the x-coordinate (time index) for the aligned point in series_two
+            y_one = series_one.iloc[index_one[point]] # Get the y-coordinate (value) for the aligned point in series_one
+            y_two = series_two.iloc[index_two[point]] # Get the y-coordinate (value) for the aligned point in series_two
             plt.plot([x_one, x_two], [y_one, y_two], color="gray", alpha=0.3)
         plt.title(f"DTW alignment lines ({label_one} vs {label_two})")
         plt.legend()
@@ -61,9 +63,14 @@ def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, 
     try:
         cost_matrix = alignment.costMatrix
         plt.figure(figsize=(6, 6))
+
+        # Plot the cost matrix, .T transposes the matrix so that the x-axis corresponds to series_one and the y-axis corresponds to series_two
+        # The origin="lower" argument ensures that the (0,0) point is at the bottom-left corner of the plot
+        # The aspect="auto" argument allows the aspect ratio of the plot to adjust automatically based on the data
+        # The cmap="viridis" argument specifies the colormap to use for the cost matrix visualization
         plt.imshow(cost_matrix.T, origin="lower", aspect="auto", cmap="viridis")
         if index_one is not None and index_two is not None:
-            plt.plot(index_one, index_two, "-r")
+            plt.plot(index_one, index_two, "-r") # Plot the warping path on top of the cost matrix
         plt.title("DTW cost matrix with warping path")
         plt.xlabel(label_one)
         plt.ylabel(label_two)
@@ -75,9 +82,13 @@ def plot_dtw_alignment(series_one: pd.Series, series_two: pd.Series, alignment, 
 
 def plot_parameter_heatmap(frame: pd.DataFrame, value_column: str, x_column: str, y_column: str, title: str) -> None:
     """Plot a heatmap for a parameter sweep frame."""
+
+    # Reshape the DataFrame (one row per embed_dim/lag/score) into a 2D matrix suitable for heatmap plotting, with embed_dim on the y-axis and lag on the x-axis
     pivot = frame.pivot(index=y_column, columns=x_column, values=value_column)
     plt.figure(figsize=(8, 6))
     plt.imshow(pivot.values, origin="lower", aspect="auto", cmap="magma")
+
+    # xticks and yticks are set to the unique values of the x_column and y_column, respectively, to label the axes with the corresponding parameter values
     plt.xticks(range(len(pivot.columns)), pivot.columns)
     plt.yticks(range(len(pivot.index)), pivot.index)
     plt.colorbar(label=value_column)
@@ -97,7 +108,11 @@ def plot_line_trend(
     ylabel: str,
     series_labels: dict[str, str] | None = None,
 ) -> None:
-    """Plot one or more line series from a tabular frame."""
+    """
+    Plot one or more line series from a tabular frame.
+    
+    Used for plotting CCM Convergence and lagged cross-correlation
+    """
     plt.figure(figsize=(8, 5))
     for column in y_columns:
         label = series_labels.get(column, column) if series_labels else column
@@ -141,8 +156,8 @@ def plot_ccm_heatmap(frame: pd.DataFrame, value_column: str = "one_two", title: 
 def plot_ccm_convergence(
     frame: pd.DataFrame,
     title: str = "CCM convergence",
-    label_one_to_two: str = "one_two",
-    label_two_to_one: str = "two_one",
+    label_one_to_two: str = "Series 1 → Series 2",
+    label_two_to_one: str = "Series 2 → Series 1",
 ) -> None:
     """Plot CCM convergence scores versus library fraction."""
     plot_line_trend(

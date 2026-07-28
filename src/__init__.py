@@ -9,7 +9,6 @@ __version__ = "0.1.0"
 from .data_loader import (
     LoadedSeriesPair,
     coerce_two_series,
-    download_data,
     download_yfinance_series,
     get_ticker_name,
     load_two_series_from_csv,
@@ -75,7 +74,6 @@ from .workflows import (
 __all__ = [
     "LoadedSeriesPair",
     "coerce_two_series",
-    "download_data",
     "download_yfinance_series",
     "get_ticker_name",
     "load_two_series_from_csv",

@@ -7,16 +7,16 @@ source handling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass # define LoadedSeriesPair
 from pathlib import Path
-from typing import Any
+from typing import Any # Handle loosely typed series inputs for coerce_two_series
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) # fronzen=True makes the dataclass immutable
 class LoadedSeriesPair:
     """Bundle two aligned 1-D series and their human-readable labels."""
 
@@ -30,21 +30,27 @@ def _download_yfinance_single_series(
     ticker: str,
     start: str,
     end: str,
-    *,
+    *, # force keyword-only arguments, must write field=..., name=..., frequency=... when calling the function
     field: str = "Close",
     name: str | None = None,
     frequency: str | None = None,
 ) -> pd.Series:
+    # progress=False disables the progress bar, auto_adjust=False keeps the raw data without adjusting for splits/dividends 
     frame = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
     if frame.empty:
         raise RuntimeError(f"Yahoo Finance returned no data for ticker '{ticker}' and the requested date range.")
 
     raw_field: pd.Series | pd.DataFrame | None = None
     if isinstance(frame.columns, pd.MultiIndex):
+        # frame.columns.get_level_values(0) returns the first level of the MultiIndex, which is usually the field name (e.g., 'Close', 'Open', etc.)
         if field in frame.columns.get_level_values(0):
-            raw_field = frame[field]
+            raw_field = frame[field] # This will return a DataFrame with the field as the column
+
+        # frame.columns.get_level_values(-1) returns the last level of the MultiIndex     
         elif field in frame.columns.get_level_values(-1):
-            raw_field = frame.xs(field, axis=1, level=-1)
+            raw_field = frame.xs(field, axis=1, level=-1) # search for the field in the last level of the MultiIndex and return a DataFrame with the field as the column (axis=1).
+
+    # If the columns are not a MultiIndex, we can check if the field is directly in the columns
     elif field in frame.columns:
         raw_field = frame[field]
 
@@ -60,16 +66,8 @@ def _download_yfinance_single_series(
     if frequency:
         if not isinstance(series.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             raise TypeError("Frequency-based resampling requires a DatetimeIndex or PeriodIndex.")
-        series = series.resample(frequency).last().dropna()
+        series = series.resample(frequency).last().dropna() # takes the last value in each resampled period, e.g., for 'M' (monthly) it takes the last value of each month
     return series
-
-
-def _validate_date(text: str) -> pd.Timestamp | None:
-    try:
-        value = pd.to_datetime(text, errors="raise")
-    except Exception:
-        return None
-    return None if pd.isna(value) else pd.Timestamp(value)
 
 
 def get_ticker_name(ticker: str) -> str:
@@ -89,7 +87,7 @@ def download_yfinance_series(
     end: str,
     name_one: str | None = None,
     name_two: str | None = None,
-    *,
+    *, # use the per-series start/end and frequency parameters to allow for non-overlapping series
     start_one: str | None = None,
     end_one: str | None = None,
     start_two: str | None = None,
@@ -161,12 +159,21 @@ def load_two_series_from_csv(
         pd.to_numeric(left_frame[left_value_column], errors="coerce"),
         index=left_index,
         name=left_name or left_value_column,
-    ).dropna()
+    )
     right_series = pd.Series(
         pd.to_numeric(right_frame[right_value_column], errors="coerce"),
         index=right_index,
         name=right_name or right_value_column,
-    ).dropna()
+    )
+
+    if isinstance(left_series.index, pd.DatetimeIndex):
+        left_series = left_series[left_series.index.notna()]
+
+    if isinstance(right_series.index, pd.DatetimeIndex):
+        right_series = right_series[right_series.index.notna()]
+
+    left_series = left_series.dropna()
+    right_series = right_series.dropna()
     
     return LoadedSeriesPair(
         left=left_series,
@@ -205,14 +212,3 @@ def coerce_two_series(
         left_name=left_series.name or left_name,
         right_name=right_series.name or right_name,
     )
-
-
-def download_data(ticker_one: str, ticker_two: str, start: str, end: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Compatibility wrapper returning price data and log returns for two tickers."""
-    loaded = download_yfinance_series(ticker_one, ticker_two, start, end)
-    prices = pd.DataFrame({ticker_one: loaded.left, ticker_two: loaded.right})
-    log_returns = pd.DataFrame({
-        f"{ticker_one}_log_return": np.log(prices[ticker_one]).diff(),
-        f"{ticker_two}_log_return": np.log(prices[ticker_two]).diff(),
-    }).dropna()
-    return prices, log_returns

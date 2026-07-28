@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing_extensions import Literal
 
 import numpy as np
 import pandas as pd
 
-from .plotting import plot_line_trend, plot_preprocessing_results, plot_single_series
+from .plotting import plot_line_trend
 
 
 @dataclass(frozen=True)
@@ -17,15 +18,19 @@ class PreprocessingConfig:
     Attributes:
         base_representation: The representation to use before optional steps.
             Supported values are ``"raw"``, ``"returns"``, and ``"log_returns"``.
+        smoothing_method: The method to use for smoothing.
         smoothing_window: Optional centered rolling window size.
+        smoothing_sigma: Optional standard deviation for Gaussian smoothing.
         downsample_step: Optional integer step for row-wise downsampling.
         downsample_freq: Optional pandas frequency alias for datetime-indexed
             series.
         standardize: Whether to z-score the final series.
     """
 
-    base_representation: str = "log_returns"
+    base_representation: Literal["raw", "returns", "log_returns"] = "log_returns"
+    smoothing_method: str | None = None # moving average or Gaussian smoothing method
     smoothing_window: int | None = None
+    smoothing_sigma: float | None = None
     downsample_step: int | None = None
     downsample_freq: str | None = None
     standardize: bool = False
@@ -61,7 +66,8 @@ def preprocess_single_series(series: pd.Series, config: PreprocessingConfig) -> 
     processed, base_label = _apply_base_representation(series, config.base_representation)
     operations = [base_label]
 
-    processed, smoothing_label = _apply_optional_smoothing(processed, config.smoothing_window)
+    # Order of operations: base representation -> smoothing -> downsampling -> standardization
+    processed, smoothing_label = _apply_optional_smoothing(processed, config.smoothing_method, config.smoothing_window, config.smoothing_sigma)
     if smoothing_label is not None:
         operations.append(smoothing_label)
 
@@ -84,19 +90,52 @@ def preprocess_single_series(series: pd.Series, config: PreprocessingConfig) -> 
 def compute_returns(series: pd.Series) -> pd.Series:
     """Compute simple percentage returns for a numeric series."""
     cleaned = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
+
+    # pct_change is x_t - x_(t-1) / x_(t-1)
     return cleaned.pct_change().dropna()
 
 
 def compute_log_returns(series: pd.Series) -> pd.Series:
     """Compute log returns for a strictly positive numeric series."""
     cleaned = pd.to_numeric(pd.Series(series), errors="coerce").dropna()
-    positive = cleaned[cleaned > 0]
-    return np.log(positive).diff().dropna()
+    positive_with_nan = cleaned.where(cleaned > 0)
+    return np.log(positive_with_nan).diff().dropna()
 
 
 def smooth_series(series: pd.Series, window: int = 5) -> pd.Series:
-    """Apply centered rolling-mean smoothing."""
-    return pd.Series(series).rolling(window=window, center=True).mean().dropna()
+    """Apply trailing moving average smoothing to a numeric series."""
+    # center=False ensures that the rolling mean is a trailing average (i.e., it only uses the current and past values, not future values).
+    # when center=True, look-ahead bias would invalidate the casual interpretation of the smoothed series
+    return pd.Series(series).rolling(window=window, center=False).mean().dropna()
+
+
+
+def gaussian_smooth_series(series: pd.Series, window: int = 5, sigma: float = 1.0) -> pd.Series:
+    """
+    Apply trailing Gaussian smoothing to a numeric series.
+    
+    Unlike a standard symmetric Guassian filter, this kernel only assigns weight to the current and past observations within the window
+    so it preserves the same causal (non-lookahead) property as the trailing moving average.
+    Weight decays with distance into the past according to "sigma":
+    a smaller sigma means more weight on the recent observations,
+    while a larger sigma approaches a flatter, moving average-like weighting.
+    """
+    if window < 1:
+        raise ValueError("Window size must be at least 1.")
+    if sigma <= 0:
+        raise ValueError("Sigma must be positive.")
+
+    cleaned = pd.Series(series).dropna()
+    # Create the relative positions of each point in the window, with the current point at position 0 and past points at negative positions
+    offsets = np.arange(-(window - 1), 1)  # e.g., for window=5, offsets = [-4, -3, -2, -1, 0]
+    # the formula for the Gaussian kernel is exp(-0.5 * (x/sigma)^2), where x is the offset from the current point
+    # when offset=0, the weight is 1 (the peak of the Gaussian), and it decays for negative offsets
+    kernel = np.exp(-0.5 * (offsets / sigma) ** 2)
+    kernel /= kernel.sum()  # Normalize the kernel to sum to 1
+
+    # np.dot is the dot product, which computes the weighted sum of the values in the window using the Gaussian kernel
+    smoothed = cleaned.rolling(window=window, center=False).apply(lambda values: np.dot(values, kernel), raw=True)
+    return smoothed.dropna()
 
 
 def standardize_series(series: pd.Series) -> pd.Series:
@@ -104,6 +143,7 @@ def standardize_series(series: pd.Series) -> pd.Series:
     cleaned = pd.Series(series).dropna()
     std = float(cleaned.std())
     if std == 0.0:
+        # If the standard deviation is zero, all values are identical. In this case, we can return a series of zeros (or NaNs) since z-scoring would not be meaningful.
         return cleaned - cleaned.mean()
     return (cleaned - cleaned.mean()) / std
 
@@ -114,6 +154,8 @@ def downsample_series(series: pd.Series, step: int | None = None, freq: str | No
     if freq:
         if not isinstance(series.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             raise TypeError("Frequency-based downsampling requires a DatetimeIndex or PeriodIndex.")
+
+        # resample(freq) groups the data into bins of the specified frequency, and .last() takes the last value in each bin. This is a common approach for downsampling time series data.
         return series.resample(freq).last().dropna()
     if step and step > 1:
         return series.iloc[::step].dropna()
@@ -128,11 +170,13 @@ def lagged_cross_correlation(series_one: pd.Series, series_two: pd.Series, max_l
     rows: list[dict[str, float | int]] = []
     for lag in range(-max_lag, max_lag + 1):
         if lag > 0:
-            aligned_left = left.iloc[:-lag]
-            aligned_right = right.iloc[lag:]
+            # shift the left series forward by lag, and the right series backward by lag, to compute the correlation at this lag
+            aligned_left = left.iloc[:-lag].reset_index(drop=True)
+            aligned_right = right.iloc[lag:].reset_index(drop=True)
         elif lag < 0:
-            aligned_left = left.iloc[-lag:]
-            aligned_right = right.iloc[:lag]
+            # shift the left series backward by lag, and the right series forward by lag, to compute the correlation at this lag
+            aligned_left = left.iloc[-lag:].reset_index(drop=True)
+            aligned_right = right.iloc[:lag].reset_index(drop=True)
         else:
             aligned_left = left
             aligned_right = right
@@ -159,7 +203,7 @@ def summarize_preprocessing(before: pd.Series, after: pd.Series, before_label: s
     }
 
 
-def _apply_base_representation(series: pd.Series, base_representation: str) -> tuple[pd.Series, str]:
+def _apply_base_representation(series: pd.Series, base_representation: Literal["raw", "returns", "log_returns"]) -> tuple[pd.Series, str]:
     cleaned = pd.Series(series).dropna()
     if base_representation == "raw":
         return cleaned, "raw values"
@@ -170,9 +214,15 @@ def _apply_base_representation(series: pd.Series, base_representation: str) -> t
     raise ValueError("base_representation must be one of 'raw', 'returns', or 'log_returns'.")
 
 
-def _apply_optional_smoothing(series: pd.Series, window: int | None) -> tuple[pd.Series, str | None]:
+
+
+def _apply_optional_smoothing(series: pd.Series, method: str | None, window: int | None, sigma: float | None) -> tuple[pd.Series, str | None]:
     if window is None:
         return series, None
+    if method == "gaussian":
+        effective_sigma = sigma if sigma is not None else 1.0
+        smoothed = gaussian_smooth_series(series, window=window, sigma=effective_sigma)
+        return smoothed, f"gaussian_smoothed(window={window}, sigma={effective_sigma})"
     smoothed = smooth_series(series, window=window)
     return smoothed, f"smoothed(window={window})"
 
@@ -224,6 +274,7 @@ def preprocess_series_pair(
         right_label=final_label_two,
         summary_left=summary_one,
         summary_right=summary_two,
+        # Merge the operations from both series, ensuring uniqueness while preserving order
         operations=list(dict.fromkeys(left_metadata["operations"] + right_metadata["operations"])),
         config=shared_config,
     )
@@ -246,7 +297,6 @@ def lagged_cross_correlation_report(
     if valid.empty:
         return frame
 
-    best_index = valid.abs().idxmax()
     plot_line_trend(
         frame,
         "lag",
