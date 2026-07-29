@@ -23,7 +23,7 @@ from statsmodels.tsa.stattools import grangercausalitytests
 def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series):
     """Compute DTW on the raw sequence order of two series, ignoring their index alignment.
     
-    This is uesed in the DTW alignment mode for variable-lag style analysis.
+    This is used in the DTW alignment mode for variable-lag style analysis.
     """
 
     x = np.asarray(series_one, dtype=float).reshape(-1, 1)
@@ -65,8 +65,15 @@ def warp_series_to_match(
 ) -> pd.Series:
     """Warp series_source onto the index of series_target using a DTW path.
     
-    This variant ignores the original index alignment and uses the DTW warping path in sequence-order space.
-    The returned series has the same index as series_target
+    Important: dtw_alignment must have been produced by
+    compute_dtw_sequence(series_source, series_target) — i.e. series_source
+    was passed as the first argument (the DTW "query") and series_target as
+    the second (the DTW "reference"). Passing an alignment computed in the
+    opposite order will silently mismatch path_source/path_target.
+
+    This variant ignores the original index alignment and uses the DTW
+    warping path in sequence-order space. The returned series has the same
+    index as series_target.
     """
 
     if not isinstance(series_source, pd.Series) or not isinstance(series_target, pd.Series):
