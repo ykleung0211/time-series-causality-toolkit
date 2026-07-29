@@ -88,7 +88,7 @@ def make_series_stationary(
     current = pd.Series(series).dropna()
     diff_order = 0
 
-    while diff_order <= max_diff_order:
+    while True:
         stage_name = f"{series_name} (diff order {diff_order})"
         adf_result = adf_unit_root_test(current, stage_name, alpha=alpha)
         print_adf_summary(adf_result, alpha, verbose=verbose)
@@ -97,15 +97,14 @@ def make_series_stationary(
             return current, {"valid": False, "stationary": False, "diff_order": diff_order, "reason": adf_result["reason"]}
         if adf_result["stationary"]:
             return current, {"valid": True, "stationary": True, "diff_order": diff_order, "reason": None}
+        if diff_order >= max_diff_order:
+            return current, {
+                "valid": True,
+                "stationary": False,
+                "diff_order": diff_order,
+                "reason": f"Not stationary even after differencing up to order {diff_order}.",
+            }
 
+        current = current.diff().dropna()
         diff_order += 1
-        # Prevent differencing beyond the maximum allowed order
-        if diff_order <= max_diff_order:
-            current = current.diff().dropna()
 
-    return current, {
-        "valid": True,
-        "stationary": False,
-        "diff_order": max_diff_order,
-        "reason": f"Not stationary even after differencing up to order {max_diff_order}.",
-    }

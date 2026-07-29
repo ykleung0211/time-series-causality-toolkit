@@ -9,6 +9,8 @@ from io import StringIO
 import logging
 import warnings
 
+from types import SimpleNamespace  # allow creating a simple object to hold attributes without defining a full class
+
 # For parameters like embedding dimension and lag in sweep functions
 from collections.abc import Iterable
 
@@ -56,6 +58,12 @@ def extract_warping_path(dtw_alignment) -> tuple[np.ndarray, np.ndarray]:
     if path.ndim != 2 or path.shape[1] != 2:
         raise ValueError("DTW warping path must be a two-column array of index pairs.")
     return path[:, 0], path[:, 1]
+
+
+def reverse_warping_path(dtw_alignment) -> SimpleNamespace:
+    """Return an object exposing a reversed DTW warping path (swap query/reference roles)."""
+    index_one, index_two = extract_warping_path(dtw_alignment)
+    return SimpleNamespace(index1=index_two, index2=index_one)
 
 
 def warp_series_to_match(
@@ -316,10 +324,12 @@ def compute_ccm(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.
             model.fit(data)
     scores = model.scores
     # Scores is a 2x2 array
-    # scores[0, 1] is the score for series_one -> series_two
-    # scores[1, 0] is for series_two -> series_one
+    # scores[0, 1] = skill of reconstructing series_one from series_two's manifold
+    # = evidence that series_one -> series_two
+    # scores[1, 0] = skill of reconstructing series_two from series_one's manifold
+    # = evidence that series_two -> series_one
     # example: scores = [[0.0, 0.5], [0.6, 0.0]]
-    # series_one -> series_two = 0.6, series_two -> series_one = 0.5
+    # series_one -> series_two = 0.5, series_two -> series_one = 0.6
     return float(scores[0, 1]), float(scores[1, 0])
 
 

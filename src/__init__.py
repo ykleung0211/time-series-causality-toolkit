@@ -20,6 +20,7 @@ from .preprocessing import (
     compute_log_returns,
     compute_returns,
     downsample_series,
+    gaussian_smooth_series,
     lagged_cross_correlation,
     lagged_cross_correlation_report,
     preprocess_series_pair,
@@ -38,6 +39,7 @@ from .causal_analysis import (
     compute_dtw_sequence,
     compute_te,
     extract_warping_path,
+    reverse_warping_path,
     run_granger_causality_report,
     print_parameter_sweep_report,
     sweep_transfer_entropy,
@@ -67,7 +69,7 @@ from .workflows import (
     run_analysis_pipeline,
 )
 
-__all__ = [
+___all___= [
     "LoadedSeriesPair",
     "coerce_two_series",
     "download_yfinance_series",
@@ -78,6 +80,7 @@ __all__ = [
     "compute_log_returns",
     "compute_returns",
     "downsample_series",
+    "gaussian_smooth_series",
     "lagged_cross_correlation",
     "lagged_cross_correlation_report",
     "preprocess_series_pair",
@@ -92,6 +95,7 @@ __all__ = [
     "compute_dtw_sequence",
     "compute_te",
     "extract_warping_path",
+    "reverse_warping_path",
     "run_granger_causality_report",
     "print_parameter_sweep_report",
     "sweep_transfer_entropy",

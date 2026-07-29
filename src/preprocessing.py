@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 from typing_extensions import Literal
 
 import numpy as np
@@ -148,16 +149,19 @@ def standardize_series(series: pd.Series) -> pd.Series:
     return (cleaned - cleaned.mean()) / std
 
 
-def downsample_series(series: pd.Series, step: int | None = None, freq: str | None = None) -> pd.Series:
+def downsample_series(series: pd.Series, step: int | None = None, freq: str | None =None) -> pd.Series:
     """Downsample by integer step or pandas frequency alias."""
     series = pd.Series(series)
     if freq:
         if not isinstance(series.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             raise TypeError("Frequency-based downsampling requires a DatetimeIndex or PeriodIndex.")
-
         # resample(freq) groups the data into bins of the specified frequency, and .last() takes the last value in each bin. This is a common approach for downsampling time series data.
         return series.resample(freq).last().dropna()
-    if step and step > 1:
+    if step is not None:
+        if step < 1:
+            raise ValueError(f"step must be a positive integer, got {step}.")
+        if step == 1:
+            warnings.warn("downsample_series called with step=1; series returned unchanged.", stacklevel=2)
         return series.iloc[::step].dropna()
     return series.dropna()
 

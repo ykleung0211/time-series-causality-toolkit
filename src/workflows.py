@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from types import SimpleNamespace  # Allow creating a simple object to hold attributes without defining a full class
 
 import pandas as pd
 
@@ -11,9 +10,9 @@ from .causal_analysis import (
     compute_ccm,
     compute_dtw_sequence,
     compute_te,
-    extract_warping_path,
     granger_direction_score,
     print_parameter_sweep_report,
+    reverse_warping_path,
     run_granger_causality_report,
     sweep_ccm_convergence_steps,
     sweep_ccm,
@@ -131,9 +130,8 @@ def _prepare_dtw_warped_series(
     series_two: pd.Series,
     dtw_alignment,
 ) -> tuple[pd.Series, pd.Series]:
-    path_one, path_two = extract_warping_path(dtw_alignment)
     warped_one_to_two = warp_series_to_match(series_one, series_two, dtw_alignment)
-    reverse_alignment = SimpleNamespace(index1=path_two, index2=path_one)
+    reverse_alignment = reverse_warping_path(dtw_alignment)
     warped_two_to_one = warp_series_to_match(series_two, series_one, reverse_alignment)
     return warped_one_to_two, warped_two_to_one
 
@@ -149,11 +147,11 @@ def _run_metric_surrogates(
 ) -> None:
     methods = _resolve_surrogate_methods(config.surrogate_method)
 
-    def _run_metric(direction_label: str, embed_dim: int, lag: int) -> None:
+    def _run_metric(direction_label: str, embed_dim: int, lag: int, score_index: int) -> None:
         if metric_name == "TE":
             real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
         else:
-            real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[0]
+            real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[score_index]
 
         if direction_label == f"{label_one} -> {label_two}":
             base_x = series_one.values
@@ -169,9 +167,9 @@ def _run_metric_surrogates(
     one_to_two = summary.get("one_to_two")
     two_to_one = summary.get("two_to_one")
     if isinstance(one_to_two, dict):
-        _run_metric(f"{label_one} -> {label_two}", int(one_to_two["embed_dim"]), int(one_to_two["lag"]))
+        _run_metric(f"{label_one} -> {label_two}", int(one_to_two["embed_dim"]), int(one_to_two["lag"]), score_index=0)
     if isinstance(two_to_one, dict):
-        _run_metric(f"{label_two} -> {label_one}", int(two_to_one["embed_dim"]), int(two_to_one["lag"]))
+        _run_metric(f"{label_two} -> {label_one}", int(two_to_one["embed_dim"]), int(two_to_one["lag"]), score_index=1)
 
 
 def _run_granger_surrogates(

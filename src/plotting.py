@@ -145,12 +145,12 @@ def plot_granger_results(frame: pd.DataFrame, title: str = "Granger causality by
 
 def plot_te_heatmap(frame: pd.DataFrame, value_column: str = "one_two", title: str = "Transfer entropy heatmap") -> None:
     """Plot a transfer-entropy heatmap."""
-    plot_parameter_heatmap(frame, value_column=value_column, x_column="embed_dim", y_column="lag", title=title)
+    plot_parameter_heatmap(frame, value_column=value_column, x_column="lag", y_column="embed_dim", title=title)
 
 
 def plot_ccm_heatmap(frame: pd.DataFrame, value_column: str = "one_two", title: str = "CCM heatmap") -> None:
     """Plot a CCM heatmap."""
-    plot_parameter_heatmap(frame, value_column=value_column, x_column="embed_dim", y_column="lag", title=title)
+    plot_parameter_heatmap(frame, value_column=value_column, x_column="lag", y_column="embed_dim", title=title)
 
 
 def plot_ccm_convergence(
