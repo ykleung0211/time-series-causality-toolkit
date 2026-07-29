@@ -68,7 +68,6 @@ from .workflows import (
     run_full_analysis_for_pair,
     run_general_workflow,
     run_preprocessing_flow,
-    run_yfinance_demo
 )
 
 __all__ = [

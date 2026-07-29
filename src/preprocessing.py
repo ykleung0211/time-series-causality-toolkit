@@ -287,15 +287,15 @@ def lagged_cross_correlation_report(
     label_two: str,
     max_lag: int = 30,
 ) -> pd.DataFrame:
-    """Compute lagged cross-correlation and produce a plot-friendly frame.
-
-    The function does not prompt for input. Callers can inspect the returned
-    frame or decide whether to plot it.
-    """
+    """Compute lagged cross-correlation and return a plot-friendly frame."""
     frame = lagged_cross_correlation(series_one, series_two, max_lag=max_lag)
     valid = frame["correlation"].dropna()
     if valid.empty:
         return frame
+
+    best_row = frame.loc[valid.abs().idxmax()]
+    frame.attrs["peak_lag"] = int(best_row["lag"])
+    frame.attrs["peak_correlation"] = float(best_row["correlation"])
 
     plot_line_trend(
         frame,

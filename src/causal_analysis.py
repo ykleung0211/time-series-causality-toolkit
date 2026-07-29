@@ -179,16 +179,28 @@ def run_granger_causality_report(
     best_one_two = _best_row(one_to_two)
     best_two_one = _best_row(two_to_one)
 
+    stronger_direction = None
+    if best_one_two is not None and best_two_one is not None:
+        stronger_direction = (
+            f"{name_one} -> {name_two}"
+            if float(best_one_two["f_stat"]) >= float(best_two_one["f_stat"])
+            else f"{name_two} -> {name_one}"
+        )
+
     if verbose:
         print("\n" + "=" * 80)
         print("GRANGER CAUSALITY REPORT")
         print("=" * 80)
-        for frame in (one_to_two, two_to_one):
+
+        direction_frames = [
+            (f"{name_one} -> {name_two}", one_to_two),
+            (f"{name_two} -> {name_one}", two_to_one),
+        ]
+        for direction_label, frame in direction_frames:
             if frame.empty:
-                print(f"No valid Granger result for {frame.attrs.get('direction', 'an unknown direction')}")
+                print(f"\nNo valid Granger result for {direction_label}")
                 continue
-            direction = frame.iloc[0]["direction"]
-            print(f"\nDirection: {direction}")
+            print(f"\nDirection: {direction_label}")
             print(frame.to_string(index=False))
 
         print("\nSummary:")
@@ -199,6 +211,7 @@ def run_granger_causality_report(
             )
         else:
             print(f"{name_one} -> {name_two}: no valid result")
+
         if best_two_one is not None:
             print(
                 f"{name_two} -> {name_one}: strongest evidence at lag {int(best_two_one['lag'])} "
@@ -207,11 +220,7 @@ def run_granger_causality_report(
         else:
             print(f"{name_two} -> {name_one}: no valid result")
 
-    stronger_direction = None
-    if best_one_two is not None and best_two_one is not None:
-        stronger_direction = f"{name_one} -> {name_two}" if best_one_two["f_stat"] >= best_two_one["f_stat"] else f"{name_two} -> {name_one}"
-
-        if stronger_direction:
+        if stronger_direction is not None:
             print(f"\nOverall stronger direction by max F-stat: {stronger_direction}")
 
     return {
@@ -332,8 +341,13 @@ def sweep_transfer_entropy_grid(
     max_lag: int,
     max_embed_dim: int,
 ) -> pd.DataFrame:
-    """Evaluate TE for all lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
-    return sweep_transfer_entropy(series_one, series_two, range(2, max_embed_dim + 1), range(1, max_lag + 1))
+    """Evaluate TE for lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
+    return sweep_transfer_entropy(
+        series_one,
+        series_two,
+        range(2, max(2, max_embed_dim) + 1),
+        range(1, max(1, max_lag) + 1),
+    )
 
 
 def sweep_ccm(
@@ -360,8 +374,13 @@ def sweep_ccm_grid(
     max_lag: int,
     max_embed_dim: int,
 ) -> pd.DataFrame:
-    """Evaluate CCM for all lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
-    return sweep_ccm(series_one, series_two, range(2, max_embed_dim + 1), range(1, max_lag + 1))
+    """Evaluate CCM for lags in [1, max_lag] and embedding dimensions in [2, max_embed_dim]."""
+    return sweep_ccm(
+        series_one,
+        series_two,
+        range(2, max(2, max_embed_dim) + 1),
+        range(1, max(1, max_lag) + 1),
+    )
 
 
 def sweep_ccm_convergence(

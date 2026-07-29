@@ -39,6 +39,9 @@ class AnalysisConfig:
     """Configuration for the main causal-analysis pipeline.
 
     Attributes:
+        run_adf_check: Whether to perform ADF unit root tests.
+        auto_difference_if_nonstationary: Whether to automatically difference non-stationary series.
+        max_diff_order: Maximum order of differencing to apply.
         run_lagged_cross_correlation: Whether to compute lagged cross-correlation.
         lcc_max_lag: Maximum lag to check for lagged cross-correlation.
         plot_lagged_cross_correlation: Whether to plot the LCC frame.
@@ -62,24 +65,34 @@ class AnalysisConfig:
         surrogate_seed: Seed for surrogate sampling.
     """
 
+    run_adf_check: bool = True
+    auto_difference_if_nonstationary: bool = True
+    max_diff_order: int = 2
+
     run_lagged_cross_correlation: bool = False
     lcc_max_lag: int = 30
     plot_lagged_cross_correlation: bool = False
+
     run_dtw: bool = True
     plot_dtw_alignment: bool = True
+    alignment_mode: str = ALIGNMENT_MODE_COMMON_INDEX
+
     run_granger: bool = True
     granger_maxlag: int = 5
     run_granger_surrogates: bool = True
+
     run_te: bool = True
     te_max_lag: int = 5
     te_max_embed_dim: int = 3
     run_te_surrogates: bool = True
+
     run_ccm: bool = True
     ccm_max_lag: int = 5
     ccm_max_embed_dim: int = 3
     run_ccm_convergence: bool = True
     ccm_library_step: float = 0.1
     run_ccm_surrogates: bool = True
+
     surrogate_method: str = "both"
     n_surrogates: int = 200
     surrogate_seed: int = 0
@@ -290,6 +303,102 @@ def _prompt_surrogate_settings() -> tuple[str, int, int]:
         print("Invalid seed. Using 0 as the default.")
         seed = 0
     return method, n_surrogates, seed
+
+
+def _apply_stationarity_policy(
+    series_one: pd.Series,
+    series_two: pd.Series,
+    label_one: str,
+    label_two: str,
+    config: AnalysisConfig,
+    verbose: bool = False,
+) -> tuple[pd.Series, pd.Series, str, str, dict[str, object], dict[str, object]]:
+    stationarity_one = adf_unit_root_test(series_one, label_one, alpha=config.stationarity_alpha)
+    stationarity_two = adf_unit_root_test(series_two, label_two, alpha=config.stationarity_alpha)
+
+    if verbose:
+        print_adf_summary(stationarity_one, alpha=config.stationarity_alpha, verbose=True)
+        print_adf_summary(stationarity_two, alpha=config.stationarity_alpha, verbose=True)
+
+    if not config.enforce_stationarity:
+        return series_one, series_two, label_one, label_two, stationarity_one, stationarity_two
+
+    updated_one = series_one
+    updated_two = series_two
+    updated_label_one = label_one
+    updated_label_two = label_two
+
+    if not bool(stationarity_one.get("stationary")):
+        updated_one, info_one = make_series_stationary(
+            series_one,
+            label_one,
+            alpha=config.stationarity_alpha,
+            max_diff_order=config.max_diff_order,
+            verbose=verbose,
+        )
+        updated_label_one = (
+            f"{label_one} (stationary, diff order {info_one['diff_order']})"
+            if info_one.get("stationary")
+            else f"{label_one} (diff order {info_one['diff_order']})"
+        )
+
+    if not bool(stationarity_two.get("stationary")):
+        updated_two, info_two = make_series_stationary(
+            series_two,
+            label_two,
+            alpha=config.stationarity_alpha,
+            max_diff_order=config.max_diff_order,
+            verbose=verbose,
+        )
+        updated_label_two = (
+            f"{label_two} (stationary, diff order {info_two['diff_order']})"
+            if info_two.get("stationary")
+            else f"{label_two} (diff order {info_two['diff_order']})"
+        )
+
+    final_label_one = _display_series_label(updated_label_one)
+    final_label_two = _display_series_label(updated_label_two)
+    final_stationarity_one = adf_unit_root_test(updated_one, final_label_one, alpha=config.stationarity_alpha)
+    final_stationarity_two = adf_unit_root_test(updated_two, final_label_two, alpha=config.stationarity_alpha)
+
+    return (
+        updated_one,
+        updated_two,
+        final_label_one,
+        final_label_two,
+        final_stationarity_one,
+        final_stationarity_two,
+    )
+
+
+def _best_ccm_params_from_summary(summary: dict[str, object], fallback_embed_dim: int, fallback_lag: int) -> tuple[int, int]:
+    candidates: list[tuple[float, int, int]] = []
+
+    one_to_two = summary.get("one_to_two")
+    if isinstance(one_to_two, dict) and "one_two" in one_to_two:
+        candidates.append(
+            (
+                float(one_to_two["one_two"]),
+                int(one_to_two["embed_dim"]),
+                int(one_to_two["lag"]),
+            )
+        )
+
+    two_to_one = summary.get("two_to_one")
+    if isinstance(two_to_one, dict) and "two_one" in two_to_one:
+        candidates.append(
+            (
+                float(two_to_one["two_one"]),
+                int(two_to_one["embed_dim"]),
+                int(two_to_one["lag"]),
+            )
+        )
+
+    if not candidates:
+        return max(2, fallback_embed_dim), max(1, fallback_lag)
+
+    _, best_embed_dim, best_lag = max(candidates, key=lambda item: item[0])
+    return best_embed_dim, best_lag
 
 
 def _prompt_preprocessing_config(series_label: str | None = None) -> PreprocessingConfig:
@@ -864,7 +973,7 @@ def _run_noninteractive_analysis(
     label_two: str,
     preprocessing_config: PreprocessingConfig | None = None,
     analysis_config: AnalysisConfig | None = None,
-    alignment_mode: str = ALIGNMENT_MODE_COMMON_INDEX,
+    alignment_mode: str | None = None,
 ) -> dict[str, object]:
     preprocessing_result = preprocess_series_pair(
         series_one,
@@ -880,17 +989,23 @@ def _run_noninteractive_analysis(
     processed_label_two = _display_series_label(preprocessing_result.right_label)
     config = analysis_config or AnalysisConfig()
 
-    print(
-        f"After preprocessing, {processed_label_one} has {len(processed_one)} observations "
-        f"(was {len(series_one)} before preprocessing)."
-    )
-    print(
-        f"After preprocessing, {processed_label_two} has {len(processed_two)} observations "
-        f"(was {len(series_two)} before preprocessing)."
-    )
+    effective_alignment_mode = alignment_mode or config.alignment_mode
 
-    stationarity_one = adf_unit_root_test(processed_one, processed_label_one)
-    stationarity_two = adf_unit_root_test(processed_two, processed_label_two)
+    (
+        processed_one,
+        processed_two,
+        processed_label_one,
+        processed_label_two,
+        stationarity_one,
+        stationarity_two,
+    ) = _apply_stationarity_policy(
+        processed_one,
+        processed_two,
+        processed_label_one,
+        processed_label_two,
+        config,
+        verbose=False,
+    )
 
     stationarity_result = {
         "left": stationarity_one,
@@ -907,45 +1022,94 @@ def _run_noninteractive_analysis(
     downstream_two = processed_two
     warped_one_to_two = None
     warped_two_to_one = None
-    
-    if dtw_alignment is not None and alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
+
+    if dtw_alignment is not None and effective_alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
         warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
         downstream_one = processed_one
         downstream_two = warped_two_to_one
-
-    elif alignment_mode == ALIGNMENT_MODE_COMMON_INDEX:
+    elif effective_alignment_mode == ALIGNMENT_MODE_COMMON_INDEX:
         try:
             downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
         except ValueError:
             downstream_one = processed_one
             downstream_two = processed_two
 
-    granger_report = run_granger_causality_report(downstream_one, downstream_two, processed_label_one, processed_label_two, maxlag=config.granger_maxlag) if config.run_granger else None
-    te_grid = sweep_transfer_entropy(downstream_one.values, downstream_two.values, range(2, max(2, config.te_max_embed_dim) + 1), range(1, max(1, config.te_max_lag) + 1)) if config.run_te else None
-    ccm_grid = sweep_ccm(
-        downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1)
-    ) if config.run_ccm else None
-    ccm_convergence = sweep_ccm_convergence_steps(
-        downstream_one.values,
-        downstream_two.values,
-        embed_dim=max(2, config.ccm_max_embed_dim),
-        lag=max(1, config.ccm_max_lag),
-        library_step=config.ccm_library_step,
-    ) if config.run_ccm and config.run_ccm_convergence else None
+    granger_report = None
+    if config.run_granger:
+        granger_report = run_granger_causality_report(
+            downstream_one,
+            downstream_two,
+            processed_label_one,
+            processed_label_two,
+            maxlag=config.granger_maxlag,
+            verbose=False,
+        )
+
+    te_grid = None
+    te_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
+    if config.run_te:
+        te_grid = sweep_transfer_entropy(
+            downstream_one.values,
+            downstream_two.values,
+            range(2, max(2, config.te_max_embed_dim) + 1),
+            range(1, max(1, config.te_max_lag) + 1),
+        )
+        te_summary = print_parameter_sweep_report(
+            te_grid,
+            "transfer entropy",
+            processed_label_one,
+            processed_label_two,
+            verbose=False,
+        )
+
+    ccm_grid = None
+    ccm_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
+    ccm_convergence = None
+    if config.run_ccm:
+        ccm_grid = sweep_ccm(
+            downstream_one.values,
+            downstream_two.values,
+            range(2, max(2, config.ccm_max_embed_dim) + 1),
+            range(1, max(1, config.ccm_max_lag) + 1),
+        )
+        ccm_summary = print_parameter_sweep_report(
+            ccm_grid,
+            "ccm",
+            processed_label_one,
+            processed_label_two,
+            verbose=False,
+        )
+
+        if config.run_ccm_convergence:
+            best_embed_dim, best_lag = _best_ccm_params_from_summary(
+                ccm_summary,
+                fallback_embed_dim=config.ccm_max_embed_dim,
+                fallback_lag=config.ccm_max_lag,
+            )
+            ccm_convergence = sweep_ccm_convergence_steps(
+                downstream_one.values,
+                downstream_two.values,
+                embed_dim=best_embed_dim,
+                lag=best_lag,
+                library_step=config.ccm_library_step,
+            )
 
     return {
         "preprocessing": preprocessing_result,
         "stationarity": stationarity_result,
         "lagged_cross_correlation": lcc_frame,
         "dtw": dtw_alignment,
-        "alignment_mode": alignment_mode,
+        "alignment_mode": effective_alignment_mode,
         "warped_one_to_two": warped_one_to_two,
         "warped_two_to_one": warped_two_to_one,
         "granger": granger_report,
         "te_grid": te_grid,
+        "te_summary": te_summary,
         "ccm_grid": ccm_grid,
+        "ccm_summary": ccm_summary,
         "ccm_convergence": ccm_convergence,
     }
+
 
 
 def _run_metric_surrogates(
@@ -985,16 +1149,27 @@ def _run_metric_surrogates(
         _run_metric(f"{label_two} -> {label_one}", int(two_to_one["embed_dim"]), int(two_to_one["lag"]))
 
 
-def _run_granger_surrogates(series_one: pd.Series, series_two: pd.Series, label_one: str, label_two: str, maxlag: int, config: AnalysisConfig) -> None:
+def _run_granger_surrogates(
+    series_one: pd.Series,
+    series_two: pd.Series,
+    label_one: str,
+    label_two: str,
+    maxlag: int,
+    config: AnalysisConfig,
+) -> None:
     if not config.run_granger_surrogates:
         return
 
     methods = _resolve_surrogate_methods(config.surrogate_method)
 
-    def _run_direction(direction_label: str, source: pd.Series, target: pd.Series) -> None:
+    def _run_direction(direction_label: str, target: pd.Series, source: pd.Series) -> None:
         for method in methods:
             result = run_surrogate_test(
-                lambda x, y: granger_direction_score(pd.Series(y), pd.Series(x), maxlag=maxlag),
+                lambda shuffled_source, fixed_target: granger_direction_score(
+                    pd.Series(fixed_target),
+                    pd.Series(shuffled_source),
+                    maxlag=maxlag,
+                ),
                 source.values,
                 target.values,
                 n_surrogates=config.n_surrogates,
@@ -1003,8 +1178,8 @@ def _run_granger_surrogates(series_one: pd.Series, series_two: pd.Series, label_
             )
             print_surrogate_summary("Granger", f"{direction_label} (maxlag={maxlag})", result, verbose=True)
 
-    _run_direction(f"{label_one} -> {label_two}", series_one, series_two)
-    _run_direction(f"{label_two} -> {label_one}", series_two, series_one)
+    _run_direction(f"{label_one} -> {label_two}", series_two, series_one)
+    _run_direction(f"{label_two} -> {label_one}", series_one, series_two)
 
 
 def execute_pipeline(
@@ -1040,8 +1215,9 @@ def run_analysis_pipeline(
     preprocessing_config: PreprocessingConfig | None = None,
     analysis_config: AnalysisConfig | None = None,
 ) -> dict[str, object]:
-    """Run the configured analysis pipeline and emit the familiar text reports."""
+    """Run the configured analysis pipeline and emit text reports without extra prompts."""
     config = analysis_config or AnalysisConfig()
+
     preprocessing_result = preprocess_series_pair(
         series_one,
         series_two,
@@ -1049,40 +1225,37 @@ def run_analysis_pipeline(
         label_two,
         preprocessing_config or PreprocessingConfig(),
     )
-    processed_label_one = _display_series_label(preprocessing_result.left_label)
-    processed_label_two = _display_series_label(preprocessing_result.right_label)
-    print(f"Downstream analyses will use {processed_label_one} and {processed_label_two}.")
-
-    if _prompt_bool("Do the ADF stationarity test now?", default=True):
-        print("Doing ADF test...")
-    else:
-        print("Skipping ADF test for now.")
-        return _run_noninteractive_analysis(
-            series_one,
-            series_two,
-            label_one,
-            label_two,
-            preprocessing_config=preprocessing_config,
-            analysis_config=analysis_config,
-            alignment_mode=ALIGNMENT_MODE_COMMON_INDEX,
-        )
 
     processed_one = preprocessing_result.left
     processed_two = preprocessing_result.right
-    processed_one, processed_two, processed_label_one, processed_label_two = _run_stationarity_check(
-        processed_one,
-        processed_two,
-        processed_label_one,
-        processed_label_two,
-    )
-    processed_label_one = _display_series_label(processed_label_one)
-    processed_label_two = _display_series_label(processed_label_two)
+    processed_label_one = _display_series_label(preprocessing_result.left_label)
+    processed_label_two = _display_series_label(preprocessing_result.right_label)
 
-    stationarity_one = adf_unit_root_test(processed_one, processed_label_one)
-    stationarity_two = adf_unit_root_test(processed_two, processed_label_two)
+    print(f"Downstream analyses will use {processed_label_one} and {processed_label_two}.")
 
-    if not bool(stationarity_one.get("stationary")) or not bool(stationarity_two.get("stationary")):
-        print("Some series remain non-stationary after preprocessing. The pipeline will continue with the transformed data.")
+    stationarity_one: dict[str, object] = {}
+    stationarity_two: dict[str, object] = {}
+
+    if config.run_adf_check:
+        print("Doing ADF test...")
+        if config.auto_difference_if_nonstationary:
+            processed_one, stationarity_one = make_series_stationary(
+                processed_one, processed_label_one,
+                max_diff_order=config.max_diff_order, verbose=True,
+            )
+            processed_two, stationarity_two = make_series_stationary(
+                processed_two, processed_label_two,
+                max_diff_order=config.max_diff_order, verbose=True,
+            )
+            if stationarity_one.get("diff_order", 0) == 0 and stationarity_two.get("diff_order", 0) == 0:
+                print("Both series are already stationary; no differencing was needed.")
+        else:
+            stationarity_one = adf_unit_root_test(processed_one, processed_label_one)
+            stationarity_two = adf_unit_root_test(processed_two, processed_label_two)
+            print_adf_summary(stationarity_one, alpha=0.05, verbose=True)
+            print_adf_summary(stationarity_two, alpha=0.05, verbose=True)
+            if not stationarity_one.get("stationary") or not stationarity_two.get("stationary"):
+                print("Some series remain non-stationary. Set auto_difference_if_nonstationary=True to difference automatically.")
 
     lcc_frame = None
     if config.run_lagged_cross_correlation:
@@ -1091,17 +1264,13 @@ def run_analysis_pipeline(
         if valid.empty:
             print(f"No valid LCC values were produced for {processed_label_one} vs {processed_label_two}.")
         else:
-            best_index = valid.abs().idxmax()
-            best_row = lcc_frame.loc[best_index]
+            best_row = lcc_frame.loc[valid.abs().idxmax()]
             print(f"Peak absolute LCC at lag {int(best_row['lag'])}: {best_row['correlation']:.6f}")
             if config.plot_lagged_cross_correlation:
                 plot_line_trend(
-                    lcc_frame,
-                    "lag",
-                    ["correlation"],
+                    lcc_frame, "lag", ["correlation"],
                     f"Lagged cross-correlation: {processed_label_one} vs {processed_label_two}",
-                    "Lag",
-                    "Pearson correlation",
+                    "Lag", "Pearson correlation",
                 )
 
     dtw_alignment = None
@@ -1110,12 +1279,14 @@ def run_analysis_pipeline(
     downstream_one = processed_one
     downstream_two = processed_two
     alignment_mode = ALIGNMENT_MODE_COMMON_INDEX
+
     if config.run_dtw:
         print("DTW is computed on the processed series shown above.")
         dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
-        alignment_mode = _prompt_alignment_mode()
+
+        alignment_mode = getattr(config, "alignment_mode", ALIGNMENT_MODE_COMMON_INDEX)
         if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
             print("Using DTW-warped alignment for Granger/TE/CCM.")
             warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
@@ -1128,6 +1299,7 @@ def run_analysis_pipeline(
                 print("No overlapping index values were available; continuing without alignment.")
                 downstream_one = processed_one
                 downstream_two = processed_two
+
         if config.plot_dtw_alignment:
             plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
 
@@ -1136,36 +1308,53 @@ def run_analysis_pipeline(
     ccm_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
 
     if config.run_granger:
-        granger_report = run_granger_causality_report(downstream_one, downstream_two, processed_label_one, processed_label_two, maxlag=config.granger_maxlag, verbose=True)
+        granger_report = run_granger_causality_report(
+            downstream_one, downstream_two, processed_label_one, processed_label_two,
+            maxlag=config.granger_maxlag, verbose=True,
+        )
         if config.run_granger_surrogates:
-            surrogate_method = _prompt_surrogate_method()
             _run_granger_surrogates(
-                downstream_one,
-                downstream_two,
-                processed_label_one,
-                processed_label_two,
-                config.granger_maxlag,
-                AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=config.n_surrogates, surrogate_seed=config.surrogate_seed),
+                downstream_one, downstream_two, processed_label_one, processed_label_two,
+                config.granger_maxlag, config,
             )
 
+    te_grid = None
     if config.run_te:
-        te_grid = sweep_transfer_entropy(downstream_one.values, downstream_two.values, range(2, max(2, config.te_max_embed_dim) + 1), range(1, max(1, config.te_max_lag) + 1))
-        te_summary = print_parameter_sweep_report(te_grid, "transfer entropy", processed_label_one, processed_label_two, verbose=True)
+        te_grid = sweep_transfer_entropy(
+            downstream_one.values, downstream_two.values,
+            range(2, max(2, config.te_max_embed_dim) + 1),
+            range(1, max(1, config.te_max_lag) + 1),
+        )
+        te_summary = print_parameter_sweep_report(
+            te_grid, "transfer entropy", processed_label_one, processed_label_two, verbose=True,
+        )
         if config.run_te_surrogates:
-            surrogate_method = _prompt_surrogate_method()
-            _run_metric_surrogates("TE", downstream_one, downstream_two, processed_label_one, processed_label_two, te_summary, AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=config.n_surrogates, surrogate_seed=config.surrogate_seed))
-    else:
-        te_grid = None
+            _run_metric_surrogates(
+                "TE", downstream_one, downstream_two, processed_label_one, processed_label_two,
+                te_summary, config,
+            )
 
+    ccm_grid = None
+    ccm_convergence = None
     if config.run_ccm:
-        ccm_grid = sweep_ccm(downstream_one.values, downstream_two.values, range(2, max(2, config.ccm_max_embed_dim) + 1), range(1, max(1, config.ccm_max_lag) + 1))
-        ccm_summary = print_parameter_sweep_report(ccm_grid, "ccm", processed_label_one, processed_label_two, verbose=True)
+        ccm_grid = sweep_ccm(
+            downstream_one.values, downstream_two.values,
+            range(2, max(2, config.ccm_max_embed_dim) + 1),
+            range(1, max(1, config.ccm_max_lag) + 1),
+        )
+        ccm_summary = print_parameter_sweep_report(
+            ccm_grid, "ccm", processed_label_one, processed_label_two, verbose=True,
+        )
+
         if config.run_ccm_convergence:
+            best_embed_dim, best_lag = _best_ccm_params_from_summary(
+                ccm_summary,
+                fallback_embed_dim=config.ccm_max_embed_dim,
+                fallback_lag=config.ccm_max_lag,
+            )
             ccm_convergence = sweep_ccm_convergence_steps(
-                downstream_one.values,
-                downstream_two.values,
-                embed_dim=max(2, config.ccm_max_embed_dim),
-                lag=max(1, config.ccm_max_lag),
+                downstream_one.values, downstream_two.values,
+                embed_dim=best_embed_dim, lag=best_lag,
                 library_step=config.ccm_library_step,
             )
             plot_ccm_convergence(
@@ -1174,14 +1363,14 @@ def run_analysis_pipeline(
                 label_one_to_two=f"{processed_label_one} -> {processed_label_two}",
                 label_two_to_one=f"{processed_label_two} -> {processed_label_one}",
             )
-        else:
-            ccm_convergence = None
+
         if config.run_ccm_surrogates:
-            surrogate_method = _prompt_surrogate_method()
-            _run_metric_surrogates("CCM", downstream_one, downstream_two, processed_label_one, processed_label_two, ccm_summary, AnalysisConfig(surrogate_method=surrogate_method, n_surrogates=config.n_surrogates, surrogate_seed=config.surrogate_seed))
+            _run_metric_surrogates(
+                "CCM", downstream_one, downstream_two, processed_label_one, processed_label_two,
+                ccm_summary, config,
+            )
     else:
         ccm_grid = None
-        ccm_convergence = None
 
     print("All done.")
     return {
@@ -1243,21 +1432,3 @@ def run_general_workflow() -> dict[str, object]:
         preprocessing_config=None,
     )
 
-
-def run_yfinance_demo(
-    ticker_one: str = "^IXIC",
-    ticker_two: str = "^GSPC",
-    start: str = "2018-01-01",
-    end: str = "2024-12-31",
-    name_one: str | None = None,
-    name_two: str | None = None,
-) -> dict[str, object]:
-    """Convenience demo for notebooks or quick experiments with Yahoo Finance data."""
-    return run_full_analysis_for_pair(
-        ticker_one=ticker_one,
-        ticker_two=ticker_two,
-        start=start,
-        end=end,
-        name_one=name_one,
-        name_two=name_two,
-    )
