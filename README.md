@@ -39,6 +39,9 @@ The validated toolkit is applied to the well-documented SPX/VIX leverage relatio
 ### 3. DTW alignment stress-test — where does the toolkit break?
 A deliberate adversarial test: does Dynamic Time Warping, a natural-seeming fix for asynchronous/stale price data, introduce more bias than it removes?
 
+<img width="690" height="392" alt="image" src="https://github.com/user-attachments/assets/1b4e9c65-f475-4fcf-8888-4f151c609bf1" />
+
+
 **Key finding:** Yes, dramatically. On synthetic illiquid-vs-liquid asset data, naive Granger analysis shows a modest, correctly-directed signal (F = 55.48 vs 1.10). After DTW realignment, the causality direction **reverses and becomes far more "confident"** (F = 24.68 vs 82.82) — a textbook look-ahead bias artifact, since DTW's warping path uses future information to align the series. The diagnostic output (mean warp offset 0.99, range -5 to +9 bars) makes the mechanism concrete and auditable.
 
 ## Why this matters for research and trading
