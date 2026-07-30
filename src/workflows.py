@@ -150,15 +150,16 @@ def _run_metric_surrogates(
     def _run_metric(direction_label: str, embed_dim: int, lag: int, score_index: int) -> None:
         if metric_name == "TE":
             real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
+            if direction_label == f"{label_one} -> {label_two}":
+                base_x = series_one.values
+                base_y = series_two.values
+            else:
+                base_x = series_two.values
+                base_y = series_one.values
         else:
             real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[score_index]
-
-        if direction_label == f"{label_one} -> {label_two}":
             base_x = series_one.values
             base_y = series_two.values
-        else:
-            base_x = series_two.values
-            base_y = series_one.values
 
         for method in methods:
             result = run_surrogate_test(real_func, base_x, base_y, n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed)

@@ -69,7 +69,7 @@ from .workflows import (
     run_analysis_pipeline,
 )
 
-___all___= [
+__all__= [
     "LoadedSeriesPair",
     "coerce_two_series",
     "download_yfinance_series",
