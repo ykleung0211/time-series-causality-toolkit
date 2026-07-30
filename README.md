@@ -32,6 +32,8 @@ Two synthetic systems with known causal direction (linear VAR, nonlinear coupled
 ### 2. SPX–VIX volatility feedback — does it hold up on real markets?
 The validated toolkit is applied to the well-documented SPX/VIX leverage relationship across three regimes (full sample, calm 2017, stress 2020).
 
+<img width="1590" height="390" alt="image" src="https://github.com/user-attachments/assets/0a108c5f-4c18-4f78-9436-37a59120c489" />
+
 **Key finding:** Lagged cross-correlation is stable and strongly negative across all regimes (-0.72 to -0.74 at lag 0). Granger causality (SPX→VIX) is significant and surrogate-validated in both calm and stress sub-regimes, but the direction flips in the naive full-sample regression — a concrete demonstration of regime-dependence and Simpson's-paradox-style aggregation bias. CCM confirms strong bidirectional coupling everywhere, consistent with the known feedback-loop structure between the index and its volatility index.
 
 ### 3. DTW alignment stress-test — where does the toolkit break?
