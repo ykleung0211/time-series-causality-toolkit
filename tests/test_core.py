@@ -37,3 +37,13 @@ def test_granger_frame_joins_on_index():
     assert len(frame) == 7
     assert (frame["target"].values == np.arange(3, 10)).all()
     assert (frame["source"].values == np.arange(0, 7)).all()
+
+def test_harmonize_differencing():
+    from src.workflows import _harmonize_differencing
+    rng = np.random.default_rng(0)
+    walk = pd.Series(np.cumsum(rng.normal(size=100)))
+    flat = walk.diff().dropna()
+    one, two, info_one, info_two = _harmonize_differencing(
+        walk, flat, {"diff_order": 1}, {"diff_order": 0}, True)
+    assert info_two["diff_order"] == 1
+    assert len(two) == len(flat) - 1
