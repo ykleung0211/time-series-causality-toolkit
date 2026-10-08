@@ -37,6 +37,7 @@ class AnalysisConfig:
         run_adf_check: Whether to perform ADF unit root tests.
         auto_difference_if_nonstationary: Whether to automatically difference non-stationary series.
         max_diff_order: Maximum order of differencing to apply.
+        harmonize_differencing: Whether to harmonize the differencing orders of the two series.
         run_lagged_cross_correlation: Whether to compute lagged cross-correlation.
         lcc_max_lag: Maximum lag to check for lagged cross-correlation.
         plot_lagged_cross_correlation: Whether to plot the LCC frame.
@@ -67,6 +68,7 @@ class AnalysisConfig:
     run_adf_check: bool = True
     auto_difference_if_nonstationary: bool = True
     max_diff_order: int = 2
+    harmonize_differencing: bool = True
 
     run_lagged_cross_correlation: bool = False
     lcc_max_lag: int = 30
@@ -235,6 +237,18 @@ def _best_ccm_params_from_summary(summary: dict[str, object], fallback_embed_dim
     _, best_embed_dim, best_lag = max(candidates, key=lambda item: item[0])
     return best_embed_dim, best_lag
 
+def _harmonize_differencing(one, two, info_one, info_two, enabled=True):
+    d1 = int(info_one.get("diff_order", 0))
+    d2 = int(info_two.get("diff_order", 0))
+    if not enabled or d1 == d2:
+        return one, two, info_one, info_two
+    target = max(d1, d2)
+    print(f"Warning: differencing orders differ ({d1} vs {d2}); harmonising both to {target}.")
+    for _ in range(target - d1):
+        one = one.diff().dropna()
+    for _ in range(target - d2):
+        two = two.diff().dropna()
+    return one, two, {**info_one, "diff_order": target, "harmonized": True}, {**info_two, "diff_order": target, "harmonized": True}
 
 def run_analysis_pipeline(
     series_one: pd.Series,
@@ -276,6 +290,9 @@ def run_analysis_pipeline(
                 processed_two, processed_label_two,
                 max_diff_order=config.max_diff_order, verbose=True,
             )
+            processed_one, processed_two, stationarity_one, stationarity_two = _harmonize_differencing(
+            processed_one, processed_two, stationarity_one, stationarity_two, config.harmonize_differencing)
+
             if stationarity_one.get("diff_order", 0) == 0 and stationarity_two.get("diff_order", 0) == 0:
                 print("Both series are already stationary; no differencing was needed.")
         else:
@@ -285,53 +302,54 @@ def run_analysis_pipeline(
             print_adf_summary(stationarity_two, alpha=0.05, verbose=True)
             if not stationarity_one.get("stationary") or not stationarity_two.get("stationary"):
                 print("Some series remain non-stationary. Set auto_difference_if_nonstationary=True to difference automatically.")
+    alignment_mode = config.alignment_mode
+    if alignment_mode not in (ALIGNMENT_MODE_COMMON_INDEX, ALIGNMENT_MODE_DTW_WARPED):
+        raise ValueError(f"Unknown alignment_mode: {alignment_mode!r}")
 
     lcc_frame = None
     if config.run_lagged_cross_correlation:
-        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=config.lcc_max_lag)
+        try:
+            lcc_one, lcc_two = _align_by_common_index(processed_one, processed_two)
+        except ValueError:
+            print("No shared index for LCC; using positional order.")
+            lcc_one, lcc_two = processed_one, processed_two
+        lcc_frame = lagged_cross_correlation(lcc_one, lcc_two, max_lag=config.lcc_max_lag)
         valid = lcc_frame["correlation"].dropna()
         if valid.empty:
             print(f"No valid LCC values were produced for {processed_label_one} vs {processed_label_two}.")
         else:
             best_row = lcc_frame.loc[valid.abs().idxmax()]
             print(f"Peak absolute LCC at lag {int(best_row['lag'])}: {best_row['correlation']:.6f}")
-            if config.plot_lagged_cross_correlation:
-                plot_line_trend(
-                    lcc_frame, "lag", ["correlation"],
-                    f"Lagged cross-correlation: {processed_label_one} vs {processed_label_two}",
-                    "Lag", "Pearson correlation",
-                )
+        if config.plot_lagged_cross_correlation:
+            plot_line_trend(
+                lcc_frame, "lag", ["correlation"],
+                f"Lagged cross-correlation: {processed_label_one} vs {processed_label_two}",
+                "Lag", "Pearson correlation",
+            )
 
     dtw_alignment = None
     warped_one_to_two = None
     warped_two_to_one = None
-    downstream_one = processed_one
-    downstream_two = processed_two
-    alignment_mode = ALIGNMENT_MODE_COMMON_INDEX
-
-    if config.run_dtw:
+    if config.run_dtw or alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
         print("DTW is computed on the processed series shown above.")
         dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
 
-        alignment_mode = config.alignment_mode
-        if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
-            print("Using DTW-warped alignment for Granger/TE/CCM.")
-            warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
-            downstream_two = warped_two_to_one
-        else:
-            print("Using common-index alignment for Granger/TE/CCM.")
-            try:
-                downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
-            except ValueError:
-                print("No overlapping index values were available; continuing without alignment.")
-                downstream_one = processed_one
-                downstream_two = processed_two
+    if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
+        print("Using DTW-warped alignment for Granger/TE/CCM.")
+        warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
+        downstream_one, downstream_two = processed_one, warped_two_to_one
+    else:
+        print("Using common-index alignment for Granger/TE/CCM.")
+        downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
 
-        if config.plot_dtw_alignment:
-            plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
+    if len(downstream_one) != len(downstream_two):
+        raise ValueError("Downstream series differ in length after alignment.")
 
+    if config.run_dtw and config.plot_dtw_alignment and dtw_alignment is not None:
+        plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
+    
     granger_report = None
     te_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
     ccm_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}

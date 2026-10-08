@@ -167,31 +167,32 @@ def downsample_series(series: pd.Series, step: int | None = None, freq: str | No
 
 
 def lagged_cross_correlation(series_one: pd.Series, series_two: pd.Series, max_lag: int = 30) -> pd.DataFrame:
-    """Compute Pearson correlation across a symmetric lag window."""
-    left = pd.to_numeric(pd.Series(series_one), errors="coerce").reset_index(drop=True)
-    right = pd.to_numeric(pd.Series(series_two), errors="coerce").reset_index(drop=True)
+    """Pearson correlation across lags, matched on the shared index.
+
+    Positive lag: series_one leads series_two, i.e. corr(series_one[t], series_two[t + lag]).
+    Negative lag: series_two leads series_one.
+    """
+    left_raw = pd.to_numeric(pd.Series(series_one), errors="coerce")
+    right_raw = pd.to_numeric(pd.Series(series_two), errors="coerce")
+    joined = pd.concat({"left": left_raw, "right": right_raw}, axis=1, join="inner").dropna()
+    if joined.empty:
+        raise ValueError("The two series share no index values for lagged cross-correlation.")
+    left = joined["left"].reset_index(drop=True)
+    right = joined["right"].reset_index(drop=True)
 
     rows: list[dict[str, float | int]] = []
     for lag in range(-max_lag, max_lag + 1):
         if lag > 0:
-            # shift the left series forward by lag, and the right series backward by lag, to compute the correlation at this lag
-            aligned_left = left.iloc[:-lag].reset_index(drop=True)
-            aligned_right = right.iloc[lag:].reset_index(drop=True)
+            a = left.iloc[:-lag]
+            b = right.iloc[lag:]
         elif lag < 0:
-            # shift the left series backward by lag, and the right series forward by lag, to compute the correlation at this lag
-            aligned_left = left.iloc[-lag:].reset_index(drop=True)
-            aligned_right = right.iloc[:lag].reset_index(drop=True)
+            a = left.iloc[-lag:]
+            b = right.iloc[:lag]
         else:
-            aligned_left = left
-            aligned_right = right
-
-        frame = pd.DataFrame({"left": aligned_left, "right": aligned_right}).dropna()
-        if len(frame) < 2:
-            correlation = np.nan
-        else:
-            correlation = float(frame["left"].corr(frame["right"]))
+            a, b = left, right
+        frame = pd.DataFrame({"left": a.reset_index(drop=True), "right": b.reset_index(drop=True)}).dropna()
+        correlation = float(frame["left"].corr(frame["right"])) if len(frame) >= 2 else np.nan
         rows.append({"lag": lag, "correlation": correlation})
-
     return pd.DataFrame(rows)
 
 

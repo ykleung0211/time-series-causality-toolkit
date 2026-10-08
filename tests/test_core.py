@@ -19,3 +19,12 @@ def test_granger_direction():
     forward = granger_direction_score(y, x, 3)   # target first, source second
     reverse = granger_direction_score(x, y, 3)
     assert forward > 5 * reverse
+
+def test_lcc_uses_index_not_position():
+    from src.preprocessing import lagged_cross_correlation
+    rng = np.random.default_rng(0)
+    base = pd.Series(rng.normal(size=400))
+    delayed = base.shift(3).iloc[4:]          # right[t] = left[t-3]; index starts at 4
+    out = lagged_cross_correlation(base, delayed, max_lag=8)
+    peak = int(out.loc[out["correlation"].abs().idxmax(), "lag"])
+    assert peak == 3

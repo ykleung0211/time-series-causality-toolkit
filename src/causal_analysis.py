@@ -131,14 +131,12 @@ def warp_series_to_match(
     return warped
 
 def _prepare_granger_frame(series_target: pd.Series, series_source: pd.Series) -> pd.DataFrame:
-    target = pd.to_numeric(pd.Series(series_target), errors="coerce").dropna().reset_index(drop=True)
-    source = pd.to_numeric(pd.Series(series_source), errors="coerce").dropna().reset_index(drop=True)
-    limit = min(len(target), len(source))
-    if limit < 2:
+    target = pd.to_numeric(pd.Series(series_target), errors="coerce")
+    source = pd.to_numeric(pd.Series(series_source), errors="coerce")
+    frame = pd.concat({"target": target, "source": source}, axis=1, join="inner").dropna()
+    if len(frame) < 2:
         return pd.DataFrame(columns=["target", "source"])
-    frame = pd.DataFrame({"target": target.iloc[:limit].to_numpy(), "source": source.iloc[:limit].to_numpy()})
-    return frame.dropna()
-
+    return frame.reset_index(drop=True)
 
 def _granger_direction_report(series_target: pd.Series, series_source: pd.Series, target_name: str, source_name: str, maxlag: int) -> pd.DataFrame:
     frame = _prepare_granger_frame(series_target, series_source)
