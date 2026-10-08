@@ -28,3 +28,12 @@ def test_lcc_uses_index_not_position():
     out = lagged_cross_correlation(base, delayed, max_lag=8)
     peak = int(out.loc[out["correlation"].abs().idxmax(), "lag"])
     assert peak == 3
+
+def test_granger_frame_joins_on_index():
+    from src.causal_analysis import _prepare_granger_frame
+    a = pd.Series(np.arange(10.0), index=range(10))
+    b = pd.Series(np.arange(10.0), index=range(3, 13))
+    frame = _prepare_granger_frame(a, b)
+    assert len(frame) == 7
+    assert (frame["target"].values == np.arange(3, 10)).all()
+    assert (frame["source"].values == np.arange(0, 7)).all()
