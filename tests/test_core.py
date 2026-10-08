@@ -1,0 +1,21 @@
+import numpy as np
+import pandas as pd
+
+from src.causal_analysis import granger_direction_score
+
+
+def linear_xy(n=1500, seed=0):
+    rng = np.random.default_rng(seed)
+    x = np.zeros(n)
+    y = np.zeros(n)
+    for t in range(1, n):
+        x[t] = 0.6 * x[t - 1] + rng.normal()
+        y[t] = 0.5 * x[t - 1] + 0.3 * y[t - 1] + rng.normal()
+    return pd.Series(x), pd.Series(y)
+
+
+def test_granger_direction():
+    x, y = linear_xy()
+    forward = granger_direction_score(y, x, 3)   # target first, source second
+    reverse = granger_direction_score(x, y, 3)
+    assert forward > 5 * reverse
