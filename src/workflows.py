@@ -60,7 +60,7 @@ class AnalysisConfig:
         run_ccm_convergence: Whether to run CCM convergence sweeps.
         ccm_library_step: Step size for CCM library fractions.
         run_ccm_surrogates: Whether to run surrogate tests for CCM.
-        surrogate_method: Surrogate strategy to use: ``shuffle``, ``bootstrap``, or ``both``.
+        surrogate_method: Surrogate strategy: shuffle, circular_shift, bootstrap, both (shuffle+bootstrap) or all.
         n_surrogates: Number of surrogate samples.
         surrogate_seed: Seed for surrogate sampling.
     """
@@ -107,11 +107,13 @@ def _display_series_label(label: str) -> str:
 
 
 def _resolve_surrogate_methods(choice: str) -> list[str]:
-    if choice == "shuffle":
-        return ["shuffle"]
-    if choice == "bootstrap":
-        return ["bootstrap"]
-    return ["shuffle", "bootstrap"]
+    if choice in ("shuffle", "bootstrap", "circular_shift"):
+        return [choice]
+    if choice == "both":
+        return ["shuffle", "bootstrap"]
+    if choice == "all":
+        return ["shuffle", "circular_shift", "bootstrap"]
+    raise ValueError(f"Unknown surrogate_method: {choice!r}. Use shuffle, circular_shift, bootstrap, both or all.")
 
 
 def _align_by_common_index(series_one: pd.Series, series_two: pd.Series) -> tuple[pd.Series, pd.Series]:

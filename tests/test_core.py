@@ -59,3 +59,30 @@ def test_preprocessing_config_validation():
         PreprocessingConfig(smoothing_method="moving_average", smoothing_window=5, smoothing_sigma=1.0)
     PreprocessingConfig(smoothing_method="gaussian", smoothing_window=5, smoothing_sigma=1.0)
     PreprocessingConfig(smoothing_window=5)
+
+def test_circular_shift_surrogates_are_rotations():
+    from src.surrogate import run_surrogate_test
+    rng = np.random.default_rng(0)
+    x = np.cumsum(rng.normal(size=300))
+    y = rng.normal(size=300)
+    seen = []
+
+    def f(a, b):
+        seen.append(np.array(a, copy=True))
+        return float(np.corrcoef(a, b)[0, 1])
+
+    run_surrogate_test(f, x, y, n_surrogates=5, method="circular_shift", seed=1)
+    assert len(seen) == 6
+    for s in seen[1:]:
+        assert any(np.array_equal(np.roll(x, k), s) for k in range(1, 300))
+
+
+def test_surrogate_p_value_floor_and_effective():
+    from src.surrogate import run_surrogate_test
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=200)
+    y = x + 0.1 * rng.normal(size=200)
+    res = run_surrogate_test(lambda a, b: abs(float(np.corrcoef(a, b)[0, 1])), x, y,
+                             n_surrogates=99, method="shuffle", seed=0)
+    assert abs(res.p_value - 0.01) < 1e-12
+    assert res.effective is not None and res.effective > 0.5
