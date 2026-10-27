@@ -35,7 +35,7 @@ def _download_yfinance_single_series(
     name: str | None = None,
     frequency: str | None = None,
 ) -> pd.Series:
-    # progress=False disables the progress bar, auto_adjust=False keeps the raw data without adjusting for splits/dividends 
+    # progress=False hides the progress bar. auto_adjust=False: Close is split-adjusted but not dividend-adjusted; Adj Close adds dividends.
     frame = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=False)
     if frame.empty:
         raise RuntimeError(f"Yahoo Finance returned no data for ticker '{ticker}' and the requested date range.")

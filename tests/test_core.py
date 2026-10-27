@@ -47,3 +47,15 @@ def test_harmonize_differencing():
         walk, flat, {"diff_order": 1}, {"diff_order": 0}, True)
     assert info_two["diff_order"] == 1
     assert len(two) == len(flat) - 1
+
+def test_preprocessing_config_validation():
+    import pytest
+    from src.preprocessing import PreprocessingConfig
+    with pytest.raises(ValueError):
+        PreprocessingConfig(smoothing_method="gausian", smoothing_window=5)
+    with pytest.raises(ValueError):
+        PreprocessingConfig(smoothing_method="gaussian")
+    with pytest.raises(ValueError):
+        PreprocessingConfig(smoothing_method="moving_average", smoothing_window=5, smoothing_sigma=1.0)
+    PreprocessingConfig(smoothing_method="gaussian", smoothing_window=5, smoothing_sigma=1.0)
+    PreprocessingConfig(smoothing_window=5)

@@ -20,7 +20,7 @@ This toolkit combines three complementary causality-detection methods, wraps eac
 | Lagged cross-correlation | Simple co-movement timing | No causal guarantee on its own |
 | DTW realignment | Corrects for stale-price/async timing | Can *introduce* look-ahead bias if misapplied |
 
-**Stationarity checks (ADF test)** and **automatic differencing** are appiled before any analysis. Every causal score is paired with **shuffle-surrogate and bootstrap significance testing** — a raw F-stat or CCM score is not a claim, a validated one is.
+**Stationarity checks (ADF test)** and **automatic differencing** are applied before any analysis. Every causal score is paired with **shuffle-surrogate and bootstrap significance testing** — a raw F-stat or CCM score is not a claim, a validated one is.
 
 ## Three notebooks, one narrative arc
 
@@ -81,10 +81,11 @@ pip install -r requirements.txt
 from src import PreprocessingConfig, AnalysisConfig, run_analysis_pipeline
 
 results = run_analysis_pipeline(
-    series_x, series_y,
+    series_x, series_y, "X", "Y",
     preprocessing_config=PreprocessingConfig(base_representation="raw", standardize=True),
     analysis_config=AnalysisConfig(
-        run_granger=True, granger_max_lag=5, run_granger_surrogates=True,
+        run_dtw=False,
+        run_granger=True, granger_maxlag=5, run_granger_surrogates=True,
         run_te=True, run_ccm=True, run_ccm_surrogates=True,
         n_surrogates=200, surrogate_seed=0,
     ),
