@@ -86,3 +86,14 @@ def test_surrogate_p_value_floor_and_effective():
                              n_surrogates=99, method="shuffle", seed=0)
     assert abs(res.p_value - 0.01) < 1e-12
     assert res.effective is not None and res.effective > 0.5
+
+def test_best_scores_are_grid_max():
+    from src.causal_analysis import best_te_score, compute_te, best_ccm_score, compute_ccm
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=400)
+    y = np.roll(x, 1) + 0.5 * rng.normal(size=400)
+    dims, lags = [2, 3], [1, 2]
+    te_singles = [compute_te(x, y, d, l) for d in dims for l in lags]
+    assert abs(best_te_score(x, y, dims, lags) - max(te_singles)) < 1e-12
+    ccm_singles = [compute_ccm(x, y, d, l)[0] for d in dims for l in lags]
+    assert abs(best_ccm_score(x, y, dims, lags, 0) - max(ccm_singles)) < 1e-12

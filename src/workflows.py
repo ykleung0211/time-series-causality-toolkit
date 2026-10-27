@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .causal_analysis import (
+    best_ccm_score,
+    best_te_score,
     compute_ccm,
     compute_dtw_sequence,
     compute_te,
@@ -150,31 +152,36 @@ def _run_metric_surrogates(
     config: AnalysisConfig,
 ) -> None:
     methods = _resolve_surrogate_methods(config.surrogate_method)
+    if metric_name == "TE":
+        embed_dims = list(range(2, max(2, config.te_max_embed_dim) + 1))
+        lags = list(range(1, max(1, config.te_max_lag) + 1))
+    else:
+        embed_dims = list(range(2, max(2, config.ccm_max_embed_dim) + 1))
+        lags = list(range(1, max(1, config.ccm_max_lag) + 1))
+    grid_note = f"max over grid: embed_dim {embed_dims[0]}-{embed_dims[-1]}, lag {lags[0]}-{lags[-1]}"
 
-    def _run_metric(direction_label: str, embed_dim: int, lag: int, score_index: int) -> None:
+    def _run_metric(direction_label: str, score_index: int) -> None:
         if metric_name == "TE":
-            real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
-            if direction_label == f"{label_one} -> {label_two}":
-                base_x = series_one.values
-                base_y = series_two.values
+            if score_index == 0:
+                base_x, base_y = series_one.values, series_two.values
             else:
-                base_x = series_two.values
-                base_y = series_one.values
+                base_x, base_y = series_two.values, series_one.values
+            real_func = lambda x, y: best_te_score(x, y, embed_dims, lags)
         else:
-            real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[score_index]
-            base_x = series_one.values
-            base_y = series_two.values
+            base_x, base_y = series_one.values, series_two.values
+            real_func = lambda x, y: best_ccm_score(x, y, embed_dims, lags, score_index)
 
         for method in methods:
-            result = run_surrogate_test(real_func, base_x, base_y, n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed)
-            print_surrogate_summary(metric_name, f"{direction_label} (embed_dim={embed_dim}, lag={lag})", result, verbose=True)
+            result = run_surrogate_test(
+                real_func, base_x, base_y,
+                n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed,
+            )
+            print_surrogate_summary(metric_name, f"{direction_label} ({grid_note})", result, verbose=True)
 
-    one_to_two = summary.get("one_to_two")
-    two_to_one = summary.get("two_to_one")
-    if isinstance(one_to_two, dict):
-        _run_metric(f"{label_one} -> {label_two}", int(one_to_two["embed_dim"]), int(one_to_two["lag"]), score_index=0)
-    if isinstance(two_to_one, dict):
-        _run_metric(f"{label_two} -> {label_one}", int(two_to_one["embed_dim"]), int(two_to_one["lag"]), score_index=1)
+    if isinstance(summary.get("one_to_two"), dict):
+        _run_metric(f"{label_one} -> {label_two}", 0)
+    if isinstance(summary.get("two_to_one"), dict):
+        _run_metric(f"{label_two} -> {label_one}", 1)
 
 
 def _run_granger_surrogates(

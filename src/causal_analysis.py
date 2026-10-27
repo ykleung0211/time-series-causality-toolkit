@@ -330,6 +330,28 @@ def compute_ccm(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.
     # series_one -> series_two = 0.5, series_two -> series_one = 0.6
     return float(scores[0, 1]), float(scores[1, 0])
 
+def best_te_score(series_one, series_two, embed_dims, lags) -> float:
+    """Maximum TE (series_one -> series_two) over a grid of embedding dimensions and lags."""
+    values = []
+    for embed_dim in embed_dims:
+        for lag in lags:
+            try:
+                values.append(compute_te(series_one, series_two, embed_dim, lag))
+            except Exception:
+                pass
+    return float(max(values)) if values else float("nan")
+
+
+def best_ccm_score(series_one, series_two, embed_dims, lags, score_index: int) -> float:
+    """Maximum CCM score (score_index 0: one->two, 1: two->one) over a parameter grid."""
+    values = []
+    for embed_dim in embed_dims:
+        for lag in lags:
+            try:
+                values.append(compute_ccm(series_one, series_two, embed_dim, lag)[score_index])
+            except Exception:
+                pass
+    return float(max(values)) if values else float("nan")
 
 def sweep_transfer_entropy(
     series_one: np.ndarray | pd.Series,
