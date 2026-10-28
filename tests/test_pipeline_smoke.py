@@ -34,3 +34,20 @@ def test_pipeline_smoke_all_surrogate_methods():
     assert out["granger"] is not None
     assert out["te_summary"]["one_to_two"] is not None
     assert out["ccm_summary"]["one_to_two"] is not None
+
+def test_pipeline_smoke_ccm_convergence_and_dtw_window():
+    x, y = _linear_pair()
+    config = AnalysisConfig(
+        run_dtw=True, plot_dtw_alignment=False, dtw_window_size=10,
+        run_granger=False, run_te=False,
+        run_ccm=True, ccm_max_lag=2, ccm_max_embed_dim=3,
+        run_ccm_convergence=True, ccm_library_step=0.5, ccm_convergence_repeats=2,
+        run_ccm_surrogates=False,
+    )
+    out = run_analysis_pipeline(
+        x, y, "X", "Y",
+        preprocessing_config=PreprocessingConfig(base_representation="raw", standardize=True),
+        analysis_config=config,
+    )
+    assert out["ccm_convergence"] is not None
+    assert out["dtw"] is not None

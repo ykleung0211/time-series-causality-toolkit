@@ -118,3 +118,25 @@ def test_block_bootstrap_interval_covers_estimate():
     res = run_surrogate_test(lambda a, b: float(np.corrcoef(a, b)[0, 1]), x, y,
                              n_surrogates=200, method="block_bootstrap", seed=0)
     assert res.ci_low < res.real < res.ci_high
+
+def test_ccm_convergence_uses_random_windows():
+    from src.causal_analysis import sweep_ccm_convergence
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=300)
+    y = np.roll(x, 1) + 0.3 * rng.normal(size=300)
+    frame = sweep_ccm_convergence(x, y, 2, 1, library_fractions=(0.5, 1.0), n_repeats=3, seed=0)
+    assert list(frame["fraction"]) == [0.5, 1.0]
+    assert frame.loc[0, "n_windows"] == 3
+    assert frame.loc[1, "n_windows"] == 1
+
+
+def test_dtw_window_constraint():
+    from src.causal_analysis import compute_dtw_sequence, extract_warping_path
+    rng = np.random.default_rng(0)
+    base = np.cumsum(rng.normal(size=120))
+    a = pd.Series(base)
+    b = pd.Series(np.roll(base, 4) + 0.1 * rng.normal(size=120))
+    compute_dtw_sequence(a, b)  # default stays unconstrained
+    tight = compute_dtw_sequence(a, b, window_size=3)
+    i, j = extract_warping_path(tight)
+    assert np.max(np.abs(j - i)) <= 3

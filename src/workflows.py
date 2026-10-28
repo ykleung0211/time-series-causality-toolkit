@@ -45,6 +45,7 @@ class AnalysisConfig:
         plot_lagged_cross_correlation: Whether to plot the LCC frame.
         run_dtw: Whether to compute DTW.
         plot_dtw_alignment: Whether to plot the DTW alignment.
+        dtw_window_size: Optional Sakoe-Chiba band for DTW (None = unconstrained).
         alignment_mode: How to align series for Granger/TE/CCM. Either
             "common_index" (intersect on shared index) or "dtw_warped"
             (re-express series_two on series_one's timeline via DTW).
@@ -61,6 +62,7 @@ class AnalysisConfig:
         ccm_max_embed_dim: Maximum embedding dimension for CCM sweeps.
         run_ccm_convergence: Whether to run CCM convergence sweeps.
         ccm_library_step: Step size for CCM library fractions.
+        ccm_convergence_repeats: Random windows averaged per library fraction.
         run_ccm_surrogates: Whether to run surrogate tests for CCM.
         surrogate_method: shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both (shuffle + block_bootstrap) or all (shuffle + circular_shift + block_bootstrap).
         n_surrogates: Number of surrogate samples.
@@ -79,6 +81,7 @@ class AnalysisConfig:
 
     run_dtw: bool = True
     plot_dtw_alignment: bool = True
+    dtw_window_size: int | None = None
     alignment_mode: str = ALIGNMENT_MODE_COMMON_INDEX
 
     run_granger: bool = True
@@ -95,6 +98,7 @@ class AnalysisConfig:
     ccm_max_embed_dim: int = 3
     run_ccm_convergence: bool = True
     ccm_library_step: float = 0.1
+    ccm_convergence_repeats: int = 10
     run_ccm_surrogates: bool = True
 
     surrogate_method: str = "both"
@@ -345,7 +349,7 @@ def run_analysis_pipeline(
     warped_two_to_one = None
     if config.run_dtw or alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
         print("DTW is computed on the processed series shown above.")
-        dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
+        dtw_alignment = compute_dtw_sequence(processed_one, processed_two, window_size=config.dtw_window_size)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
 
@@ -416,6 +420,7 @@ def run_analysis_pipeline(
                 downstream_one.values, downstream_two.values,
                 embed_dim=best_embed_dim, lag=best_lag,
                 library_step=config.ccm_library_step,
+                n_repeats=config.ccm_convergence_repeats, seed=config.surrogate_seed,
             )
             plot_ccm_convergence(
                 ccm_convergence,
