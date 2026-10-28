@@ -22,19 +22,23 @@ from infomeasure import transfer_entropy
 from statsmodels.tsa.stattools import grangercausalitytests
 
 
-def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series):
+def compute_dtw_sequence(series_one: pd.Series, series_two: pd.Series, window_size: int | None = None):
     """Compute DTW on the raw sequence order of two series, ignoring their index alignment.
-    
-    This is used in the DTW alignment mode for variable-lag style analysis.
-    """
 
+    window_size: optional Sakoe-Chiba band. Matched points must satisfy |i - j| <= window_size.
+    None keeps the original unconstrained DTW.
+    """
     x = np.asarray(series_one, dtype=float).reshape(-1, 1)
     y = np.asarray(series_two, dtype=float).reshape(-1, 1)
     if x.shape[0] == 0 or y.shape[0] == 0:
         raise ValueError("Input series must not be empty.")
-    
-    # keep_internals-True retains the cost matrix and warping path for later extraction
-    return dtw(x, y, dist_method="euclidean", keep_internals=True)
+
+    extra: dict[str, object] = {}
+    if window_size is not None:
+        extra = {"window_type": "sakoechiba", "window_args": {"window_size": int(window_size)}}
+
+    # keep_internals=True retains the cost matrix and warping path for later extraction
+    return dtw(x, y, dist_method="euclidean", keep_internals=True, **extra)
 
 
 def extract_warping_path(dtw_alignment) -> tuple[np.ndarray, np.ndarray]:
@@ -131,14 +135,12 @@ def warp_series_to_match(
     return warped
 
 def _prepare_granger_frame(series_target: pd.Series, series_source: pd.Series) -> pd.DataFrame:
-    target = pd.to_numeric(pd.Series(series_target), errors="coerce").dropna().reset_index(drop=True)
-    source = pd.to_numeric(pd.Series(series_source), errors="coerce").dropna().reset_index(drop=True)
-    limit = min(len(target), len(source))
-    if limit < 2:
+    target = pd.to_numeric(pd.Series(series_target), errors="coerce")
+    source = pd.to_numeric(pd.Series(series_source), errors="coerce")
+    frame = pd.concat({"target": target, "source": source}, axis=1, join="inner").dropna()
+    if len(frame) < 2:
         return pd.DataFrame(columns=["target", "source"])
-    frame = pd.DataFrame({"target": target.iloc[:limit].to_numpy(), "source": source.iloc[:limit].to_numpy()})
-    return frame.dropna()
-
+    return frame.reset_index(drop=True)
 
 def _granger_direction_report(series_target: pd.Series, series_source: pd.Series, target_name: str, source_name: str, maxlag: int) -> pd.DataFrame:
     frame = _prepare_granger_frame(series_target, series_source)
@@ -332,6 +334,28 @@ def compute_ccm(series_one: np.ndarray | pd.Series, series_two: np.ndarray | pd.
     # series_one -> series_two = 0.5, series_two -> series_one = 0.6
     return float(scores[0, 1]), float(scores[1, 0])
 
+def best_te_score(series_one, series_two, embed_dims, lags) -> float:
+    """Maximum TE (series_one -> series_two) over a grid of embedding dimensions and lags."""
+    values = []
+    for embed_dim in embed_dims:
+        for lag in lags:
+            try:
+                values.append(compute_te(series_one, series_two, embed_dim, lag))
+            except Exception:
+                pass
+    return float(max(values)) if values else float("nan")
+
+
+def best_ccm_score(series_one, series_two, embed_dims, lags, score_index: int) -> float:
+    """Maximum CCM score (score_index 0: one->two, 1: two->one) over a parameter grid."""
+    values = []
+    for embed_dim in embed_dims:
+        for lag in lags:
+            try:
+                values.append(compute_ccm(series_one, series_two, embed_dim, lag)[score_index])
+            except Exception:
+                pass
+    return float(max(values)) if values else float("nan")
 
 def sweep_transfer_entropy(
     series_one: np.ndarray | pd.Series,
@@ -407,17 +431,21 @@ def sweep_ccm_convergence(
     lag: int,
     library_fractions: Iterable[float] | None = None,
     library_step: float | None = None,
+    n_repeats: int = 10,
+    seed: int = 0,
 ) -> pd.DataFrame:
-    """Approximate CCM convergence by increasing the library size."""
+    """Approximate CCM convergence using random windows of increasing length.
+
+    For each library fraction, CCM is computed on n_repeats random contiguous windows
+    and the scores are averaged. This avoids tying library size to one time period.
+    The full-length window is used once.
+    """
     if library_fractions is None:
         if library_step is None:
             library_fractions = (0.2, 0.4, 0.6, 0.8, 1.0)
         else:
             fractions: list[float] = []
-            # current is the current library fraction, starting from library_step and incrementing by library_step until 1.0
             current = float(library_step)
-            
-            # Use a small epsilon to avoid floating-point precision issues when comparing to 1.0
             while current <= 1.0 + 1e-9:
                 fractions.append(round(current, 10))
                 current += float(library_step)
@@ -426,17 +454,29 @@ def sweep_ccm_convergence(
     x = np.asarray(series_one)
     y = np.asarray(series_two)
     n_obs = min(len(x), len(y))
+    rng = np.random.default_rng(seed)
     rows: list[dict[str, float | int]] = []
 
     for fraction in library_fractions:
-        n_keep = max(10, int(n_obs * float(fraction)))
-        prefix_x = x[:n_keep]
-        prefix_y = y[:n_keep]
-        try:
-            one_two, two_one = compute_ccm(prefix_x, prefix_y, embed_dim, lag)
-        except Exception:
+        n_keep = min(n_obs, max(10, int(n_obs * float(fraction))))
+        repeats = 1 if n_keep >= n_obs else max(1, int(n_repeats))
+        scores: list[tuple[float, float]] = []
+        for _ in range(repeats):
+            start = 0 if n_keep >= n_obs else int(rng.integers(0, n_obs - n_keep + 1))
+            try:
+                scores.append(compute_ccm(x[start:start + n_keep], y[start:start + n_keep], embed_dim, lag))
+            except Exception:
+                continue
+        if scores:
+            arr = np.asarray(scores, dtype=float)
+            one_two = float(np.nanmean(arr[:, 0]))
+            two_one = float(np.nanmean(arr[:, 1]))
+        else:
             one_two, two_one = np.nan, np.nan
-        rows.append({"fraction": float(fraction), "n_obs": n_keep, "one_two": one_two, "two_one": two_one})
+        rows.append({
+            "fraction": float(fraction), "n_obs": n_keep, "n_windows": len(scores),
+            "one_two": one_two, "two_one": two_one,
+        })
 
     return pd.DataFrame(rows)
 
@@ -447,9 +487,14 @@ def sweep_ccm_convergence_steps(
     embed_dim: int,
     lag: int,
     library_step: float,
+    n_repeats: int = 10,
+    seed: int = 0,
 ) -> pd.DataFrame:
     """Convenience wrapper for CCM convergence using a user-provided step."""
-    return sweep_ccm_convergence(series_one, series_two, embed_dim, lag, library_step=library_step)
+    return sweep_ccm_convergence(
+        series_one, series_two, embed_dim, lag,
+        library_step=library_step, n_repeats=n_repeats, seed=seed,
+    )
 
 
 def print_parameter_sweep_report(

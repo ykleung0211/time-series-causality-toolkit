@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .causal_analysis import (
+    best_ccm_score,
+    best_te_score,
     compute_ccm,
     compute_dtw_sequence,
     compute_te,
@@ -37,11 +39,13 @@ class AnalysisConfig:
         run_adf_check: Whether to perform ADF unit root tests.
         auto_difference_if_nonstationary: Whether to automatically difference non-stationary series.
         max_diff_order: Maximum order of differencing to apply.
+        harmonize_differencing: Whether to harmonize the differencing orders of the two series.
         run_lagged_cross_correlation: Whether to compute lagged cross-correlation.
         lcc_max_lag: Maximum lag to check for lagged cross-correlation.
         plot_lagged_cross_correlation: Whether to plot the LCC frame.
         run_dtw: Whether to compute DTW.
         plot_dtw_alignment: Whether to plot the DTW alignment.
+        dtw_window_size: Optional Sakoe-Chiba band for DTW (None = unconstrained).
         alignment_mode: How to align series for Granger/TE/CCM. Either
             "common_index" (intersect on shared index) or "dtw_warped"
             (re-express series_two on series_one's timeline via DTW).
@@ -58,15 +62,18 @@ class AnalysisConfig:
         ccm_max_embed_dim: Maximum embedding dimension for CCM sweeps.
         run_ccm_convergence: Whether to run CCM convergence sweeps.
         ccm_library_step: Step size for CCM library fractions.
+        ccm_convergence_repeats: Random windows averaged per library fraction.
         run_ccm_surrogates: Whether to run surrogate tests for CCM.
-        surrogate_method: Surrogate strategy to use: ``shuffle``, ``bootstrap``, or ``both``.
+        surrogate_method: shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both (shuffle + block_bootstrap) or all (shuffle + circular_shift + block_bootstrap).
         n_surrogates: Number of surrogate samples.
         surrogate_seed: Seed for surrogate sampling.
+        bootstrap_block_len: Block length for block bootstrap (default about n ** (1/3)).
     """
 
     run_adf_check: bool = True
     auto_difference_if_nonstationary: bool = True
     max_diff_order: int = 2
+    harmonize_differencing: bool = True
 
     run_lagged_cross_correlation: bool = False
     lcc_max_lag: int = 30
@@ -74,6 +81,7 @@ class AnalysisConfig:
 
     run_dtw: bool = True
     plot_dtw_alignment: bool = True
+    dtw_window_size: int | None = None
     alignment_mode: str = ALIGNMENT_MODE_COMMON_INDEX
 
     run_granger: bool = True
@@ -90,12 +98,13 @@ class AnalysisConfig:
     ccm_max_embed_dim: int = 3
     run_ccm_convergence: bool = True
     ccm_library_step: float = 0.1
+    ccm_convergence_repeats: int = 10
     run_ccm_surrogates: bool = True
 
     surrogate_method: str = "both"
     n_surrogates: int = 200
     surrogate_seed: int = 0
-
+    bootstrap_block_len: int | None = None
 
 def _display_series_label(label: str) -> str:
     # example: if label is "AAPL (Apple Inc.)", return "AAPL"
@@ -105,11 +114,15 @@ def _display_series_label(label: str) -> str:
 
 
 def _resolve_surrogate_methods(choice: str) -> list[str]:
-    if choice == "shuffle":
-        return ["shuffle"]
-    if choice == "bootstrap":
-        return ["bootstrap"]
-    return ["shuffle", "bootstrap"]
+    if choice in ("shuffle", "circular_shift", "block_bootstrap", "bootstrap"):
+        return [choice]
+    if choice == "both":
+        return ["shuffle", "block_bootstrap"]
+    if choice == "all":
+        return ["shuffle", "circular_shift", "block_bootstrap"]
+    raise ValueError(
+        f"Unknown surrogate_method: {choice!r}. Use shuffle, circular_shift, block_bootstrap, bootstrap, both or all."
+    )
 
 
 def _align_by_common_index(series_one: pd.Series, series_two: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -146,31 +159,36 @@ def _run_metric_surrogates(
     config: AnalysisConfig,
 ) -> None:
     methods = _resolve_surrogate_methods(config.surrogate_method)
+    if metric_name == "TE":
+        embed_dims = list(range(2, max(2, config.te_max_embed_dim) + 1))
+        lags = list(range(1, max(1, config.te_max_lag) + 1))
+    else:
+        embed_dims = list(range(2, max(2, config.ccm_max_embed_dim) + 1))
+        lags = list(range(1, max(1, config.ccm_max_lag) + 1))
+    grid_note = f"max over grid: embed_dim {embed_dims[0]}-{embed_dims[-1]}, lag {lags[0]}-{lags[-1]}"
 
-    def _run_metric(direction_label: str, embed_dim: int, lag: int, score_index: int) -> None:
+    def _run_metric(direction_label: str, score_index: int) -> None:
         if metric_name == "TE":
-            real_func = lambda x, y: compute_te(x, y, embed_dim=embed_dim, lag=lag)
-            if direction_label == f"{label_one} -> {label_two}":
-                base_x = series_one.values
-                base_y = series_two.values
+            if score_index == 0:
+                base_x, base_y = series_one.values, series_two.values
             else:
-                base_x = series_two.values
-                base_y = series_one.values
+                base_x, base_y = series_two.values, series_one.values
+            real_func = lambda x, y: best_te_score(x, y, embed_dims, lags)
         else:
-            real_func = lambda x, y: compute_ccm(x, y, embed_dim=embed_dim, lag=lag)[score_index]
-            base_x = series_one.values
-            base_y = series_two.values
+            base_x, base_y = series_one.values, series_two.values
+            real_func = lambda x, y: best_ccm_score(x, y, embed_dims, lags, score_index)
 
         for method in methods:
-            result = run_surrogate_test(real_func, base_x, base_y, n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed)
-            print_surrogate_summary(metric_name, f"{direction_label} (embed_dim={embed_dim}, lag={lag})", result, verbose=True)
+            result = run_surrogate_test(
+                real_func, base_x, base_y,
+                n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed, block_len=config.bootstrap_block_len,
+            )
+            print_surrogate_summary(metric_name, f"{direction_label} ({grid_note})", result, verbose=True)
 
-    one_to_two = summary.get("one_to_two")
-    two_to_one = summary.get("two_to_one")
-    if isinstance(one_to_two, dict):
-        _run_metric(f"{label_one} -> {label_two}", int(one_to_two["embed_dim"]), int(one_to_two["lag"]), score_index=0)
-    if isinstance(two_to_one, dict):
-        _run_metric(f"{label_two} -> {label_one}", int(two_to_one["embed_dim"]), int(two_to_one["lag"]), score_index=1)
+    if isinstance(summary.get("one_to_two"), dict):
+        _run_metric(f"{label_one} -> {label_two}", 0)
+    if isinstance(summary.get("two_to_one"), dict):
+        _run_metric(f"{label_two} -> {label_one}", 1)
 
 
 def _run_granger_surrogates(
@@ -199,6 +217,7 @@ def _run_granger_surrogates(
                 n_surrogates=config.n_surrogates,
                 method=method,
                 seed=config.surrogate_seed,
+                block_len=config.bootstrap_block_len,
             )
             print_surrogate_summary("Granger", f"{direction_label} (maxlag={maxlag})", result, verbose=True)
 
@@ -235,6 +254,18 @@ def _best_ccm_params_from_summary(summary: dict[str, object], fallback_embed_dim
     _, best_embed_dim, best_lag = max(candidates, key=lambda item: item[0])
     return best_embed_dim, best_lag
 
+def _harmonize_differencing(one, two, info_one, info_two, enabled=True):
+    d1 = int(info_one.get("diff_order", 0))
+    d2 = int(info_two.get("diff_order", 0))
+    if not enabled or d1 == d2:
+        return one, two, info_one, info_two
+    target = max(d1, d2)
+    print(f"Warning: differencing orders differ ({d1} vs {d2}); harmonising both to {target}.")
+    for _ in range(target - d1):
+        one = one.diff().dropna()
+    for _ in range(target - d2):
+        two = two.diff().dropna()
+    return one, two, {**info_one, "diff_order": target, "harmonized": True}, {**info_two, "diff_order": target, "harmonized": True}
 
 def run_analysis_pipeline(
     series_one: pd.Series,
@@ -276,6 +307,9 @@ def run_analysis_pipeline(
                 processed_two, processed_label_two,
                 max_diff_order=config.max_diff_order, verbose=True,
             )
+            processed_one, processed_two, stationarity_one, stationarity_two = _harmonize_differencing(
+            processed_one, processed_two, stationarity_one, stationarity_two, config.harmonize_differencing)
+
             if stationarity_one.get("diff_order", 0) == 0 and stationarity_two.get("diff_order", 0) == 0:
                 print("Both series are already stationary; no differencing was needed.")
         else:
@@ -285,53 +319,54 @@ def run_analysis_pipeline(
             print_adf_summary(stationarity_two, alpha=0.05, verbose=True)
             if not stationarity_one.get("stationary") or not stationarity_two.get("stationary"):
                 print("Some series remain non-stationary. Set auto_difference_if_nonstationary=True to difference automatically.")
+    alignment_mode = config.alignment_mode
+    if alignment_mode not in (ALIGNMENT_MODE_COMMON_INDEX, ALIGNMENT_MODE_DTW_WARPED):
+        raise ValueError(f"Unknown alignment_mode: {alignment_mode!r}")
 
     lcc_frame = None
     if config.run_lagged_cross_correlation:
-        lcc_frame = lagged_cross_correlation(processed_one, processed_two, max_lag=config.lcc_max_lag)
+        try:
+            lcc_one, lcc_two = _align_by_common_index(processed_one, processed_two)
+        except ValueError:
+            print("No shared index for LCC; using positional order.")
+            lcc_one, lcc_two = processed_one, processed_two
+        lcc_frame = lagged_cross_correlation(lcc_one, lcc_two, max_lag=config.lcc_max_lag)
         valid = lcc_frame["correlation"].dropna()
         if valid.empty:
             print(f"No valid LCC values were produced for {processed_label_one} vs {processed_label_two}.")
         else:
             best_row = lcc_frame.loc[valid.abs().idxmax()]
             print(f"Peak absolute LCC at lag {int(best_row['lag'])}: {best_row['correlation']:.6f}")
-            if config.plot_lagged_cross_correlation:
-                plot_line_trend(
-                    lcc_frame, "lag", ["correlation"],
-                    f"Lagged cross-correlation: {processed_label_one} vs {processed_label_two}",
-                    "Lag", "Pearson correlation",
-                )
+        if config.plot_lagged_cross_correlation:
+            plot_line_trend(
+                lcc_frame, "lag", ["correlation"],
+                f"Lagged cross-correlation: {processed_label_one} vs {processed_label_two}",
+                "Lag", "Pearson correlation",
+            )
 
     dtw_alignment = None
     warped_one_to_two = None
     warped_two_to_one = None
-    downstream_one = processed_one
-    downstream_two = processed_two
-    alignment_mode = ALIGNMENT_MODE_COMMON_INDEX
-
-    if config.run_dtw:
+    if config.run_dtw or alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
         print("DTW is computed on the processed series shown above.")
-        dtw_alignment = compute_dtw_sequence(processed_one, processed_two)
+        dtw_alignment = compute_dtw_sequence(processed_one, processed_two, window_size=config.dtw_window_size)
         print(f"DTW distance: {dtw_alignment.distance:.6f}")
         print(f"DTW normalized distance: {dtw_alignment.normalizedDistance:.6f}")
 
-        alignment_mode = config.alignment_mode
-        if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
-            print("Using DTW-warped alignment for Granger/TE/CCM.")
-            warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
-            downstream_two = warped_two_to_one
-        else:
-            print("Using common-index alignment for Granger/TE/CCM.")
-            try:
-                downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
-            except ValueError:
-                print("No overlapping index values were available; continuing without alignment.")
-                downstream_one = processed_one
-                downstream_two = processed_two
+    if alignment_mode == ALIGNMENT_MODE_DTW_WARPED:
+        print("Using DTW-warped alignment for Granger/TE/CCM.")
+        warped_one_to_two, warped_two_to_one = _prepare_dtw_warped_series(processed_one, processed_two, dtw_alignment)
+        downstream_one, downstream_two = processed_one, warped_two_to_one
+    else:
+        print("Using common-index alignment for Granger/TE/CCM.")
+        downstream_one, downstream_two = _align_by_common_index(processed_one, processed_two)
 
-        if config.plot_dtw_alignment:
-            plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
+    if len(downstream_one) != len(downstream_two):
+        raise ValueError("Downstream series differ in length after alignment.")
 
+    if config.run_dtw and config.plot_dtw_alignment and dtw_alignment is not None:
+        plot_dtw_alignment(processed_one, processed_two, dtw_alignment, processed_label_one, processed_label_two)
+    
     granger_report = None
     te_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
     ccm_summary: dict[str, object] = {"one_to_two": None, "two_to_one": None}
@@ -385,6 +420,7 @@ def run_analysis_pipeline(
                 downstream_one.values, downstream_two.values,
                 embed_dim=best_embed_dim, lag=best_lag,
                 library_step=config.ccm_library_step,
+                n_repeats=config.ccm_convergence_repeats, seed=config.surrogate_seed,
             )
             plot_ccm_convergence(
                 ccm_convergence,

@@ -20,7 +20,7 @@ class PreprocessingConfig:
         base_representation: The representation to use before optional steps.
             Supported values are ``"raw"``, ``"returns"``, and ``"log_returns"``.
         smoothing_method: The method to use for smoothing.
-        smoothing_window: Optional centered rolling window size.
+        Optional trailing (backward-looking) rolling window size.
         smoothing_sigma: Optional standard deviation for Gaussian smoothing.
         downsample_step: Optional integer step for row-wise downsampling.
         downsample_freq: Optional pandas frequency alias for datetime-indexed
@@ -35,7 +35,14 @@ class PreprocessingConfig:
     downsample_step: int | None = None
     downsample_freq: str | None = None
     standardize: bool = False
-
+    
+    def __post_init__(self):
+        if self.smoothing_method not in (None, "moving_average", "gaussian"):
+            raise ValueError(f"Unknown smoothing_method: {self.smoothing_method!r}")
+        if self.smoothing_method == "gaussian" and self.smoothing_window is None:
+            raise ValueError("Gaussian smoothing needs smoothing_window.")
+        if self.smoothing_sigma is not None and self.smoothing_method != "gaussian":
+            raise ValueError("smoothing_sigma only applies to gaussian smoothing.")
 
 @dataclass(frozen=True)
 class PreprocessingResult:
@@ -106,7 +113,7 @@ def compute_log_returns(series: pd.Series) -> pd.Series:
 def smooth_series(series: pd.Series, window: int = 5) -> pd.Series:
     """Apply trailing moving average smoothing to a numeric series."""
     # center=False ensures that the rolling mean is a trailing average (i.e., it only uses the current and past values, not future values).
-    # when center=True, look-ahead bias would invalidate the casual interpretation of the smoothed series
+    # when center=True, look-ahead bias would invalidate the causal interpretation of the smoothed series
     return pd.Series(series).rolling(window=window, center=False).mean().dropna()
 
 
@@ -115,7 +122,7 @@ def gaussian_smooth_series(series: pd.Series, window: int = 5, sigma: float = 1.
     """
     Apply trailing Gaussian smoothing to a numeric series.
     
-    Unlike a standard symmetric Guassian filter, this kernel only assigns weight to the current and past observations within the window
+    Unlike a standard symmetric Gaussian filter, this kernel only assigns weight to the current and past observations within the window
     so it preserves the same causal (non-lookahead) property as the trailing moving average.
     Weight decays with distance into the past according to "sigma":
     a smaller sigma means more weight on the recent observations,
@@ -167,31 +174,32 @@ def downsample_series(series: pd.Series, step: int | None = None, freq: str | No
 
 
 def lagged_cross_correlation(series_one: pd.Series, series_two: pd.Series, max_lag: int = 30) -> pd.DataFrame:
-    """Compute Pearson correlation across a symmetric lag window."""
-    left = pd.to_numeric(pd.Series(series_one), errors="coerce").reset_index(drop=True)
-    right = pd.to_numeric(pd.Series(series_two), errors="coerce").reset_index(drop=True)
+    """Pearson correlation across lags, matched on the shared index.
+
+    Positive lag: series_one leads series_two, i.e. corr(series_one[t], series_two[t + lag]).
+    Negative lag: series_two leads series_one.
+    """
+    left_raw = pd.to_numeric(pd.Series(series_one), errors="coerce")
+    right_raw = pd.to_numeric(pd.Series(series_two), errors="coerce")
+    joined = pd.concat({"left": left_raw, "right": right_raw}, axis=1, join="inner").dropna()
+    if joined.empty:
+        raise ValueError("The two series share no index values for lagged cross-correlation.")
+    left = joined["left"].reset_index(drop=True)
+    right = joined["right"].reset_index(drop=True)
 
     rows: list[dict[str, float | int]] = []
     for lag in range(-max_lag, max_lag + 1):
         if lag > 0:
-            # shift the left series forward by lag, and the right series backward by lag, to compute the correlation at this lag
-            aligned_left = left.iloc[:-lag].reset_index(drop=True)
-            aligned_right = right.iloc[lag:].reset_index(drop=True)
+            a = left.iloc[:-lag]
+            b = right.iloc[lag:]
         elif lag < 0:
-            # shift the left series backward by lag, and the right series forward by lag, to compute the correlation at this lag
-            aligned_left = left.iloc[-lag:].reset_index(drop=True)
-            aligned_right = right.iloc[:lag].reset_index(drop=True)
+            a = left.iloc[-lag:]
+            b = right.iloc[:lag]
         else:
-            aligned_left = left
-            aligned_right = right
-
-        frame = pd.DataFrame({"left": aligned_left, "right": aligned_right}).dropna()
-        if len(frame) < 2:
-            correlation = np.nan
-        else:
-            correlation = float(frame["left"].corr(frame["right"]))
+            a, b = left, right
+        frame = pd.DataFrame({"left": a.reset_index(drop=True), "right": b.reset_index(drop=True)}).dropna()
+        correlation = float(frame["left"].corr(frame["right"])) if len(frame) >= 2 else np.nan
         rows.append({"lag": lag, "correlation": correlation})
-
     return pd.DataFrame(rows)
 
 
@@ -227,8 +235,9 @@ def _apply_optional_smoothing(series: pd.Series, method: str | None, window: int
         effective_sigma = sigma if sigma is not None else 1.0
         smoothed = gaussian_smooth_series(series, window=window, sigma=effective_sigma)
         return smoothed, f"gaussian_smoothed(window={window}, sigma={effective_sigma})"
-    smoothed = smooth_series(series, window=window)
-    return smoothed, f"smoothed(window={window})"
+    if method in (None, "moving_average"):
+        return smooth_series(series, window=window), f"smoothed(window={window})"
+    raise ValueError(f"Unknown smoothing method: {method!r}")
 
 
 def _apply_optional_downsampling(series: pd.Series, step: int | None, freq: str | None) -> tuple[pd.Series, str | None]:

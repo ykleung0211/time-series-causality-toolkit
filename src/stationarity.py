@@ -65,7 +65,7 @@ def print_adf_summary(result: dict[str, object], alpha: float, verbose: bool = F
         print(f"Status: INVALID ({result['reason']})")
         print("-" * 80)
         return
-    print(f"Observations:         {result['n_obs']}")
+    print(f"Observations used in ADF regression:         {result['n_obs']}")
     print(f"ADF statistic:        {result['adf_stat']:.6f}")
     print(f"p-value:              {result['pvalue']:.6f}")
     print(f"Used lags:            {result['usedlag']}")
