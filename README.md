@@ -30,21 +30,24 @@ All runs are single simulated seeds with development-size surrogate counts (40 t
 An earlier version of notebook 03 reported that DTW reversed the causal direction. That result came from smoothing only one series and then pairing the series by position, which shifted them by four days. After the fix, the reversal disappeared. The same audit showed that a plain shuffle null made TE look wrong-direction on the linear system, which a circular-shift null corrected. Both corrections are covered by tests.
 
 ## Repository structure
+```text
 ├── case_study/
-│ ├── 01_synthetic_validation.ipynb
-│ ├── 02_spx_vix_volatility_feedback.ipynb
-│ └── 03_dtw_alignment_and_preprocessing.ipynb
+│   ├── 01_synthetic_validation.ipynb
+│   ├── 02_spx_vix_volatility_feedback.ipynb
+│   └── 03_dtw_alignment_and_preprocessing.ipynb
 ├── src/
-│ ├── causal_analysis.py # Granger, TE, CCM, DTW, sweeps
-│ ├── data_loader.py
-│ ├── plotting.py
-│ ├── preprocessing.py
-│ ├── stationarity.py
-│ ├── surrogate.py
-│ └── workflows.py # AnalysisConfig, run_analysis_pipeline
+│   ├── __init__.py
+│   ├── causal_analysis.py               # Granger, TE, CCM, DTW, sweeps
+│   ├── data_loader.py
+│   ├── plotting.py
+│   ├── preprocessing.py
+│   ├── stationarity.py
+│   ├── surrogate.py
+│   └── workflows.py                    # AnalysisConfig, run_analysis_pipeline
 ├── requirements.txt
-└── LICENSE
-
+├── LICENSE
+└── README.md
+```
 
 ## Installation
 
