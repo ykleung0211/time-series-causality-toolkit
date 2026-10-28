@@ -49,7 +49,6 @@ An earlier version of notebook 03 reported that DTW reversed the causal directio
 └── README.md
 ```
 
-
 ## Installation
 
 ```bash
