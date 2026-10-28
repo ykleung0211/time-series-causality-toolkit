@@ -1,81 +1,61 @@
-# Time Series Causality Toolkit
+# Time-Series Causality Toolkit
 
-A Python toolkit for detecting and validating causal relationships between time series, 
-supporting both linear (Granger causality) and nonlinear (Transfer Entropy, Convergent 
-Cross Mapping) methods, with built-in surrogate significance testing.
+A research-prototype Python toolkit for detecting and validating directional relationships between pairs of time series. It combines Granger causality, transfer entropy (TE) and convergent cross mapping (CCM), and attaches a null model to every score, so a number is only reported next to evidence that it is not noise.
 
-## Why this exists
+Status: v0.2. Validated on simulated systems with known direction and on SPX/VIX. The next stage extends it to multivariate and high-dimensional data (see Roadmap).
 
-*"Does X actually drive Y, or are we just looking at a correlated coincidence?"* Standard tools (Granger causality, correlation, cointegration) answer this under a linear lens. Markets are not always linear, and even well-established techniques carry hidden failure modes — spurious detections, misidentified direction, or bias introduced by naive preprocessing.
+## What is inside
 
-This toolkit combines three complementary causality-detection methods, wraps each in surrogate/bootstrap significance testing, and — critically — includes a dedicated notebook whose sole purpose is to find where the toolkit itself breaks. Most causal-inference codebases show you when a method works. This one also shows you when it lies.
-
-## What's inside
-
-| Method | Captures | Weakness it covers |
+| Component | Purpose | Known limitation |
 |---|---|---|
-| Granger causality | Linear, lagged predictive power | Fast, interpretable, but blind to nonlinear coupling |
-| Transfer Entropy (TE) | Nonlinear, information-theoretic dependence | Sensitive to embedding/lag choice |
-| Convergent Cross Mapping (CCM) | Nonlinear dynamical coupling (Sugihara framework) | Can misread synchronized systems as bidirectional |
-| Lagged cross-correlation | Simple co-movement timing | No causal guarantee on its own |
-| DTW realignment | Corrects for stale-price/async timing | Can *introduce* look-ahead bias if misapplied |
+| Granger causality | Linear, lagged predictability | Flags false reverse links under strong nonlinear coupling |
+| Transfer entropy (ordinal) | Nonlinear information transfer | Biased at small samples; needs a matched null |
+| CCM | Dynamical coupling | Reports both directions under synchronisation |
+| Lagged cross-correlation | Lead-lag timing | Not causal on its own |
+| DTW alignment (optional, banded) | Realign asynchronous series | Cuts power and gives unstable offsets |
+| Surrogates | shuffle, circular shift, block bootstrap | p-values are floored at 1/(n_surrogates+1) |
 
-**Stationarity checks (ADF test)** and **automatic differencing** are applied before any analysis. Every causal score is paired with **shuffle-surrogate and bootstrap significance testing** — a raw F-stat or CCM score is not a claim, a validated one is.
+Preprocessing: raw / returns / log returns, trailing smoothing, downsampling, z-scoring, ADF test with automatic differencing (both series are differenced to the same order). All series are matched on their date index, never by position.
 
-## Three notebooks, one narrative arc
+## Findings so far
 
-### 1. Ground-truth validation — does the toolkit actually work?
-Two synthetic systems with known causal direction (linear VAR, nonlinear coupled logistic maps) are used to benchmark all three methods against ground truth.
+All runs are single simulated seeds with development-size surrogate counts (40 to 200), so p-values sit at their floors. Treat them as preliminary.
 
-**Key finding:** No single method is universally reliable. Granger nails the linear system (F = 357.5, p = 0.005) but produces a *spurious significant result in the wrong direction* on the nonlinear system (F = 129.7, p < 0.001) — a real, cited failure mode of linear F-tests under nonlinear dynamics. CCM and TE correctly identify the true direction on the nonlinear system, but generate misleading near-symmetric scores when coupling is strong. Surrogate testing is what separates real signal from artifact in every case.
+1. Synthetic validation (notebook 01). Linear system: Granger recovers X→Y (F=357.5 vs 1.6). TE points the right way weakly (0.087 vs 0.065). CCM favours the wrong direction (Y→X 0.480 vs X→Y 0.145, both significant). Nonlinear coupled maps: all three rank X→Y first, and all three also flag a false reverse link at strong coupling. At weak coupling the CCM reverse link disappears; the TE reverse link does not.
+2. SPX/VIX (notebook 02). Lagged correlation peaks at lag 0 (-0.72 to -0.74). Granger SPX→VIX is significant in every regime. VIX→SPX is not significant in the calm and stress years under a circular-shift null, but has the larger F in the full sample. TE is at or below its null in the 250-observation regimes. CCM is high in both directions, consistent with VIX being derived from SPX options.
+3. DTW stress test (notebook 03). With both series smoothed identically and matched on dates, lagged correlation recovers the true 3-day delay. Granger on the naive alignment gives F=122.9 vs 9.9. DTW-warped alignment keeps the direction (F=32.2 vs 3.0) but loses about 74% of the F-statistic and gives unstable offsets (std 2.8). A band constraint changes little.
 
-### 2. SPX–VIX volatility feedback — does it hold up on real markets?
-The validated toolkit is applied to the well-documented SPX/VIX leverage relationship across three regimes (full sample, calm 2017, stress 2020).
+## Lessons and corrections
 
-**Key finding:** Lagged cross-correlation is stable and strongly negative across all regimes (-0.72 to -0.74 at lag 0). Granger causality (SPX→VIX) is significant and surrogate-validated in both calm and stress sub-regimes, but the direction flips in the naive full-sample regression — a concrete demonstration of regime-dependence and Simpson's-paradox-style aggregation bias. CCM confirms strong bidirectional coupling everywhere, consistent with the known feedback-loop structure between the index and its volatility index.
-
-### 3. DTW alignment stress-test — where does the toolkit break?
-A deliberate adversarial test: does Dynamic Time Warping, a natural-seeming fix for asynchronous/stale price data, introduce more bias than it removes?
-
-**Key finding:** Yes, dramatically. On synthetic illiquid-vs-liquid asset data, naive Granger analysis shows a modest, correctly-directed signal (F = 55.48 vs 1.10). After DTW realignment, the causality direction **reverses and becomes far more "confident"** (F = 24.68 vs 82.82) — a textbook look-ahead bias artifact, since DTW's warping path uses future information to align the series. The diagnostic output (mean warp offset 0.99, range -5 to +9 bars) makes the mechanism concrete and auditable.
-
-## Why this matters for research and trading
-
-- **Methodological honesty:** every notebook distinguishes a raw statistic from a surrogate-validated claim.
-- **Regime awareness:** the SPX/VIX study shows causal direction is not a fixed property of a market relationship — it can flip with the sample window.
-- **Preprocessing risk:** the DTW notebook is a cautionary case study relevant to anyone aligning illiquid instruments, alternative data, or multi-venue tick data.
-- **Reproducibility:** all findings are generated from deterministic seeds and included directly in the notebooks.
-
+An earlier version of notebook 03 reported that DTW reversed the causal direction. That result came from smoothing only one series and then pairing the series by position, which shifted them by four days. After the fix, the reversal disappeared. The same audit showed that a plain shuffle null made TE look wrong-direction on the linear system, which a circular-shift null corrected. Both corrections are covered by tests.
 
 ## Repository structure
-```
 ├── case_study/
-│   ├── 01_synthetic_validation.ipynb
-│   ├── 02_spx_vix_volatility_feedback.ipynb
-│   └── 03_dtw_alignment_and_preprocessing.ipynb
+│ ├── 01_synthetic_validation.ipynb
+│ ├── 02_spx_vix_volatility_feedback.ipynb
+│ └── 03_dtw_alignment_and_preprocessing.ipynb
 ├── src/
-│   ├── causal_analysis.py
-│   ├── data_loader.py
-│   ├── plotting.py
-│   ├── preprocessing.py
-│   ├── stationarity.py
-│   ├── surrogate.py
-│   └── workflows.py
-├── LICENSE
-└── requirements.txt
-```
+│ ├── causal_analysis.py # Granger, TE, CCM, DTW, sweeps
+│ ├── data_loader.py
+│ ├── plotting.py
+│ ├── preprocessing.py
+│ ├── stationarity.py
+│ ├── surrogate.py
+│ └── workflows.py # AnalysisConfig, run_analysis_pipeline
+├── requirements.txt
+└── LICENSE
 
 
 ## Installation
 
 ```bash
-git clone https://github.com/ykleung0211/time-series-causality-toolkit.git
+git clone [https://github.com/ykleung0211/time-series-causality-toolkit.git](https://github.com/ykleung0211/time-series-causality-toolkit.git)
 cd time-series-causality-toolkit
-pip install -r requirements.txt
+python -m venv .venv
+pip install -r requirements.txt pytest
 ```
 
-
-## Getting started
+## Quick start
 
 ```python
 from src import PreprocessingConfig, AnalysisConfig, run_analysis_pipeline
@@ -87,7 +67,17 @@ results = run_analysis_pipeline(
         run_dtw=False,
         run_granger=True, granger_maxlag=5, run_granger_surrogates=True,
         run_te=True, run_ccm=True, run_ccm_surrogates=True,
-        n_surrogates=200, surrogate_seed=0,
+        n_surrogates=200, surrogate_seed=0, surrogate_method="circular_shift",
     ),
 )
 ```
+
+surrogate_method accepts shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both, or all. TE and CCM take the maximum over the parameter grid inside every surrogate, so selection is accounted for.
+
+## Roadmap
+
+- Multivariate Granger via VAR with coefficient tables and false-discovery control
+- Sparse (penalised) VAR and PCMCI for higher-dimensional systems
+- Benchmarks on simulated systems with known causal graphs (sparse VAR, coupled maps, Lorenz-96), with TPR, FDR and SHD
+- Latent-mixing benchmark: a known causal system embedded into 64 to 128 dimensions
+- Real-data application after the benchmarks
