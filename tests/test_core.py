@@ -140,3 +140,14 @@ def test_dtw_window_constraint():
     tight = compute_dtw_sequence(a, b, window_size=3)
     i, j = extract_warping_path(tight)
     assert np.max(np.abs(j - i)) <= 3
+
+def test_surrogate_parallel_matches_serial():
+    from src.surrogate import run_surrogate_test
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=200)
+    y = x + rng.normal(size=200)
+    f = lambda a, b: float(np.corrcoef(a, b)[0, 1])
+    r1 = run_surrogate_test(f, x, y, n_surrogates=20, method="circular_shift", seed=3, n_jobs=1)
+    r2 = run_surrogate_test(f, x, y, n_surrogates=20, method="circular_shift", seed=3, n_jobs=2)
+    assert np.allclose(r1.surrogates, r2.surrogates)
+    assert r1.p_value == r2.p_value
