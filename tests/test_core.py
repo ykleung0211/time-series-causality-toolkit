@@ -97,3 +97,24 @@ def test_best_scores_are_grid_max():
     assert abs(best_te_score(x, y, dims, lags) - max(te_singles)) < 1e-12
     ccm_singles = [compute_ccm(x, y, d, l)[0] for d in dims for l in lags]
     assert abs(best_ccm_score(x, y, dims, lags, 0) - max(ccm_singles)) < 1e-12
+
+def test_block_bootstrap_resamples_pairs_jointly():
+    from src.surrogate import run_surrogate_test
+    rng = np.random.default_rng(0)
+    x = np.cumsum(rng.normal(size=200))
+    y = 2.0 * x
+    res = run_surrogate_test(lambda a, b: float(np.max(np.abs(b - 2.0 * a))), x, y,
+                             n_surrogates=20, method="block_bootstrap", seed=0)
+    assert res.real == 0.0
+    assert np.all(res.surrogates == 0.0)
+    assert res.ci_low is not None and res.ci_high is not None
+
+
+def test_block_bootstrap_interval_covers_estimate():
+    from src.surrogate import run_surrogate_test
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=500)
+    y = 0.5 * x + rng.normal(size=500)
+    res = run_surrogate_test(lambda a, b: float(np.corrcoef(a, b)[0, 1]), x, y,
+                             n_surrogates=200, method="block_bootstrap", seed=0)
+    assert res.ci_low < res.real < res.ci_high

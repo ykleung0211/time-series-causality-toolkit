@@ -62,9 +62,10 @@ class AnalysisConfig:
         run_ccm_convergence: Whether to run CCM convergence sweeps.
         ccm_library_step: Step size for CCM library fractions.
         run_ccm_surrogates: Whether to run surrogate tests for CCM.
-        surrogate_method: Surrogate strategy: shuffle, circular_shift, bootstrap, both (shuffle+bootstrap) or all.
+        surrogate_method: shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both (shuffle + block_bootstrap) or all (shuffle + circular_shift + block_bootstrap).
         n_surrogates: Number of surrogate samples.
         surrogate_seed: Seed for surrogate sampling.
+        bootstrap_block_len: Block length for block bootstrap (default about n ** (1/3)).
     """
 
     run_adf_check: bool = True
@@ -99,7 +100,7 @@ class AnalysisConfig:
     surrogate_method: str = "both"
     n_surrogates: int = 200
     surrogate_seed: int = 0
-
+    bootstrap_block_len: int | None = None
 
 def _display_series_label(label: str) -> str:
     # example: if label is "AAPL (Apple Inc.)", return "AAPL"
@@ -109,13 +110,15 @@ def _display_series_label(label: str) -> str:
 
 
 def _resolve_surrogate_methods(choice: str) -> list[str]:
-    if choice in ("shuffle", "bootstrap", "circular_shift"):
+    if choice in ("shuffle", "circular_shift", "block_bootstrap", "bootstrap"):
         return [choice]
     if choice == "both":
-        return ["shuffle", "bootstrap"]
+        return ["shuffle", "block_bootstrap"]
     if choice == "all":
-        return ["shuffle", "circular_shift", "bootstrap"]
-    raise ValueError(f"Unknown surrogate_method: {choice!r}. Use shuffle, circular_shift, bootstrap, both or all.")
+        return ["shuffle", "circular_shift", "block_bootstrap"]
+    raise ValueError(
+        f"Unknown surrogate_method: {choice!r}. Use shuffle, circular_shift, block_bootstrap, bootstrap, both or all."
+    )
 
 
 def _align_by_common_index(series_one: pd.Series, series_two: pd.Series) -> tuple[pd.Series, pd.Series]:
@@ -174,7 +177,7 @@ def _run_metric_surrogates(
         for method in methods:
             result = run_surrogate_test(
                 real_func, base_x, base_y,
-                n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed,
+                n_surrogates=config.n_surrogates, method=method, seed=config.surrogate_seed, block_len=config.bootstrap_block_len,
             )
             print_surrogate_summary(metric_name, f"{direction_label} ({grid_note})", result, verbose=True)
 
@@ -210,6 +213,7 @@ def _run_granger_surrogates(
                 n_surrogates=config.n_surrogates,
                 method=method,
                 seed=config.surrogate_seed,
+                block_len=config.bootstrap_block_len,
             )
             print_surrogate_summary("Granger", f"{direction_label} (maxlag={maxlag})", result, verbose=True)
 
