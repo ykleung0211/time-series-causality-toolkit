@@ -37,6 +37,10 @@ class PreprocessingConfig:
     standardize: bool = False
     
     def __post_init__(self):
+        if self.smoothing_method == "moving_average" and self.smoothing_window is None:
+            raise ValueError("moving_average smoothing needs smoothing_window.")
+        if self.smoothing_window is not None and self.smoothing_window < 1:
+            raise ValueError("smoothing_window must be at least 1.")
         if self.smoothing_method not in (None, "moving_average", "gaussian"):
             raise ValueError(f"Unknown smoothing_method: {self.smoothing_method!r}")
         if self.smoothing_method == "gaussian" and self.smoothing_window is None:
@@ -71,17 +75,28 @@ class PreprocessingResult:
 
 def preprocess_single_series(series: pd.Series, config: PreprocessingConfig) -> tuple[pd.Series, dict[str, object]]:
     """Apply preprocessing steps to a single series and return metadata about the transform."""
-    processed, base_label = _apply_base_representation(series, config.base_representation)
-    operations = [base_label]
+    levels = pd.Series(series).dropna()
+    operations: list[str] = []
 
-    # Order of operations: base representation -> smoothing -> downsampling -> standardization
+    # For returns, downsample the LEVELS first, then take returns. Downsampling returns
+    # would keep one period's return per bin instead of the return across the whole bin.
+    downsample_first = config.base_representation != "raw"
+    if downsample_first:
+        levels, downsample_label = _apply_optional_downsampling(levels, config.downsample_step, config.downsample_freq)
+        if downsample_label is not None:
+            operations.append(downsample_label)
+
+    processed, base_label = _apply_base_representation(levels, config.base_representation)
+    operations.append(base_label)
+
     processed, smoothing_label = _apply_optional_smoothing(processed, config.smoothing_method, config.smoothing_window, config.smoothing_sigma)
     if smoothing_label is not None:
         operations.append(smoothing_label)
 
-    processed, downsample_label = _apply_optional_downsampling(processed, config.downsample_step, config.downsample_freq)
-    if downsample_label is not None:
-        operations.append(downsample_label)
+    if not downsample_first:
+        processed, downsample_label = _apply_optional_downsampling(processed, config.downsample_step, config.downsample_freq)
+        if downsample_label is not None:
+            operations.append(downsample_label)
 
     if config.standardize:
         processed = standardize_series(processed)
