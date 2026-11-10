@@ -12,7 +12,7 @@ Status: v0.2. Validated on simulated systems with known direction and on SPX/VIX
 | Transfer entropy (ordinal) | Nonlinear information transfer | Biased at small samples; needs a matched null |
 | CCM | Dynamical coupling | Reports both directions under synchronisation |
 | Lagged cross-correlation | Lead-lag timing | Not causal on its own |
-| DTW alignment (optional, banded) | Realign asynchronous series | Cuts power and gives unstable offsets |
+| DTW alignment (optional, banded) | Realign asynchronous series | Lowers the Granger F-statistic and gives unstable offsets; not shown to improve direction detection |
 | Surrogates | shuffle, circular shift, block bootstrap | p-values are floored at 1/(n_surrogates+1) |
 
 Preprocessing: raw / returns / log returns, trailing smoothing, downsampling, z-scoring, ADF test with automatic differencing (both series are differenced to the same order). All series are matched on their date index, never by position.
@@ -23,11 +23,11 @@ All runs are single simulated seeds with development-size surrogate counts (40 t
 
 1. Synthetic validation (notebook 01). Linear system: Granger recovers X→Y (F=357.5 vs 1.6). TE points the right way weakly (0.087 vs 0.065). CCM favours the wrong direction (Y→X 0.480 vs X→Y 0.145, both significant). Nonlinear coupled maps: all three rank X→Y first, and all three also flag a false reverse link at strong coupling. At weak coupling the CCM reverse link disappears; the TE reverse link does not.
 2. SPX/VIX (notebook 02). Lagged correlation peaks at lag 0 (-0.72 to -0.74). Granger SPX→VIX is significant in every regime. VIX→SPX is not significant in the calm and stress years under a circular-shift null, but has the larger F in the full sample. TE is at or below its null in the 250-observation regimes. CCM is high in both directions, consistent with VIX being derived from SPX options.
-3. DTW stress test (notebook 03). With both series smoothed identically and matched on dates, lagged correlation recovers the true 3-day delay. Granger on the naive alignment gives F=122.9 vs 9.9. DTW-warped alignment keeps the direction (F=32.2 vs 3.0) but loses about 74% of the F-statistic and gives unstable offsets (std 2.8). A band constraint changes little.
+3. DTW stress test (notebook 03). With both series smoothed identically and matched on dates, lagged correlation recovers the true 3-day delay. Granger on the naive alignment gives F=122.9 vs 9.9. DTW-warped alignment keeps the direction (F=32.2 vs 3.0), but the forward F-statistic is about 74% lower (this is not a measured loss of statistical power) and the implied offsets are unstable (std 2.8). A band of 5 gives similar results (F=33.8 vs 2.7). Single simulated seed.The block-bootstrap interval for the common-index forward F depends strongly on block length (8: [39.7, 89.7]; 30: [68.5, 127.6]; 50: [78.1, 129.2]; observed 122.9). Coverage has not been tested, so treat it as a sensitivity band.
 
 ## Lessons and corrections
 
-An earlier version of notebook 03 reported that DTW reversed the causal direction. That result came from smoothing only one series and then pairing the series by position, which shifted them by four days. After the fix, the reversal disappeared. The same audit showed that a plain shuffle null made TE look wrong-direction on the linear system, which a circular-shift null corrected. Both corrections are covered by tests.
+An earlier version of notebook 03 reported that DTW reversed the causal direction. That result came from smoothing only one series and then pairing the series by position, which shifted them by four days. After the fix, the reversal disappeared. An earlier version that used a plain shuffle null with fixed parameters made TE look wrong-direction on the linear system. After switching to circular-shift nulls and repeating the parameter-grid search inside every surrogate, it did not. Both changes were made together. A later shuffle-only run with the matched grid showed no wrong-direction signal (TE X->Y p=0.066, Y->X p=0.525), only lower sensitivity.
 
 ## Repository structure
 ```text
@@ -43,7 +43,7 @@ An earlier version of notebook 03 reported that DTW reversed the causal directio
 │   ├── preprocessing.py
 │   ├── stationarity.py
 │   ├── surrogate.py
-│   └── workflows.py  #AnalysisConfigrun_analysis_pipeline             
+│   └── workflows.py  # AnalysisConfig, run_analysis_pipeline           
 ├── requirements.txt
 ├── LICENSE
 └── README.md
@@ -52,9 +52,10 @@ An earlier version of notebook 03 reported that DTW reversed the causal directio
 ## Installation
 
 ```bash
-git clone [https://github.com/ykleung0211/time-series-causality-toolkit.git](https://github.com/ykleung0211/time-series-causality-toolkit.git)
+git clone https://github.com/ykleung0211/time-series-causality-toolkit.git
 cd time-series-causality-toolkit
 python -m venv .venv
+# Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt pytest
 ```
 
@@ -75,7 +76,7 @@ results = run_analysis_pipeline(
 )
 ```
 
-surrogate_method accepts shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both, or all. TE and CCM take the maximum over the parameter grid inside every surrogate, so selection is accounted for.
+surrogate_method accepts circular_shift (default), shuffle, block_bootstrap, bootstrap (legacy), both (shuffle + block_bootstrap), or all (shuffle + circular_shift + block_bootstrap). For Granger, the block-bootstrap block length is at least 3 x granger_maxlag unless bootstrap_block_len is set. TE and CCM take the maximum over the parameter grid inside every surrogate, so selection is accounted for.
 
 ## Roadmap
 
