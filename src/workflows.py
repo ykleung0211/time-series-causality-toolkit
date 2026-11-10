@@ -101,7 +101,7 @@ class AnalysisConfig:
     ccm_convergence_repeats: int = 10
     run_ccm_surrogates: bool = True
 
-    surrogate_method: str = "both"
+    surrogate_method: str = "circular_shift"  # shuffle, circular_shift, block_bootstrap, bootstrap (legacy), both (shuffle + block_bootstrap) or all (shuffle + circular_shift + block_bootstrap)
     n_surrogates: int = 200
     surrogate_seed: int = 0
     bootstrap_block_len: int | None = None
@@ -190,6 +190,15 @@ def _run_metric_surrogates(
     if isinstance(summary.get("two_to_one"), dict):
         _run_metric(f"{label_two} -> {label_one}", 1)
 
+def _granger_block_len(n: int, maxlag: int, config: AnalysisConfig) -> int:
+    """Block length for Granger block bootstrap: never shorter than 3 x maxlag."""
+    if config.bootstrap_block_len is not None:
+        if config.bootstrap_block_len < maxlag:
+            print(f"Warning: bootstrap_block_len={config.bootstrap_block_len} is shorter than "
+                  f"granger_maxlag={maxlag}; block-bootstrap intervals will be biased.")
+        return config.bootstrap_block_len
+    default = max(2, int(round(n ** (1.0 / 3.0))))
+    return max(default, 3 * maxlag)
 
 def _run_granger_surrogates(
     series_one: pd.Series,
@@ -217,7 +226,7 @@ def _run_granger_surrogates(
                 n_surrogates=config.n_surrogates,
                 method=method,
                 seed=config.surrogate_seed,
-                block_len=config.bootstrap_block_len,
+                block_len=_granger_block_len(len(source), maxlag, config),
             )
             print_surrogate_summary("Granger", f"{direction_label} (maxlag={maxlag})", result, verbose=True)
 
