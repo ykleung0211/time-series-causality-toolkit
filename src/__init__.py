@@ -5,7 +5,7 @@ causal-analysis, surrogate testing, and plotting utilities used by
 the non-interactive analysis pipeline.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .data_loader import (
     LoadedSeriesPair,
